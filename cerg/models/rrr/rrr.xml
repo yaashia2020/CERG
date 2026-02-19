@@ -1,0 +1,58 @@
+<!-- MuJoCo model for RRR Planar 3-Link Robot Arm
+     3 revolute joints, all rotating about the Z axis.
+     Link lengths: 0.4m, 0.3m, 0.2m
+     Matches the URDF definition for cross-simulator verification.
+-->
+<mujoco model="rrr">
+  <compiler angle="radian"/>
+
+  <option gravity="0 0 -9.81" timestep="0.001"/>
+
+  <default>
+    <joint damping="0.1" armature="0.01"/>
+    <geom rgba="0.2 0.4 0.8 1.0" contype="1" conaffinity="1"/>
+  </default>
+
+  <worldbody>
+    <!-- Ground plane -->
+    <geom name="floor" type="plane" size="2 2 0.01" rgba="0.9 0.9 0.9 1" contype="0" conaffinity="0"/>
+
+    <!-- Base mount -->
+    <body name="base" pos="0 0 0.5">
+      <geom name="base_geom" type="cylinder" size="0.06 0.025" rgba="0.5 0.5 0.5 1"/>
+
+      <!-- Link 1: 0.4 m -->
+      <body name="link1" pos="0 0 0.05">
+        <joint name="joint1" type="hinge" axis="0 0 1" range="-3.14159 3.14159"
+               damping="0.1"/>
+        <geom name="link1_geom" type="capsule" fromto="0 0 0 0.4 0 0"
+              size="0.03" mass="2.0"/>
+
+        <!-- Link 2: 0.3 m -->
+        <body name="link2" pos="0.4 0 0">
+          <joint name="joint2" type="hinge" axis="0 0 1" range="-3.14159 3.14159"
+                 damping="0.1"/>
+          <geom name="link2_geom" type="capsule" fromto="0 0 0 0.3 0 0"
+                size="0.025" mass="1.5"/>
+
+          <!-- Link 3: 0.2 m -->
+          <body name="link3" pos="0.3 0 0">
+            <joint name="joint3" type="hinge" axis="0 0 1" range="-3.14159 3.14159"
+                   damping="0.1"/>
+            <geom name="link3_geom" type="capsule" fromto="0 0 0 0.2 0 0"
+                  size="0.02" mass="1.0"/>
+
+            <!-- End-effector site -->
+            <site name="tip" pos="0.2 0 0" size="0.015" rgba="1 0 0 1"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <motor name="tau1" joint="joint1" ctrlrange="-50 50"/>
+    <motor name="tau2" joint="joint2" ctrlrange="-30 30"/>
+    <motor name="tau3" joint="joint3" ctrlrange="-20 20"/>
+  </actuator>
+</mujoco>

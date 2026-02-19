@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cerg"
+version = "0.1.0"
+description = "Robot and simulator agnostic control algorithm framework for massive data generation"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+drake = ["drake"]
+mujoco = ["mujoco>=3.0"]
+all = ["drake", "mujoco>=3.0"]
+dev = ["pytest", "pytest-cov", "ruff"]
+
+[tool.setuptools.packages.find]
+include = ["cerg*"]
+
+[tool.ruff]
+line-length = 100

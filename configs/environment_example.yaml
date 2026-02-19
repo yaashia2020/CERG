@@ -1,0 +1,23 @@
+# Environment constraints for the CERG algorithm.
+# Convention: constraints are represented as  n^T * p <= offset
+#   - n (normal) points TOWARD the constraint boundary
+#   - offset is the limit value
+#   - Safe when n^T * p <= offset
+#
+# Supported types:
+#   - half_space: plane defined by normal and offset
+#   - (future) sphere: center + radius
+#   - (future) cylinder: center + axis + radius
+
+constraints:
+  # Robot must stay at x <= 0.8
+  - type: half_space
+    normal: [1, 0, 0]
+    offset: 0.8
+    kind: soft
+
+  # Robot must stay above ground: z >= 0  (i.e. -z <= 0)
+  - type: half_space
+    normal: [0, 0, -1]
+    offset: 0.0
+    kind: hard

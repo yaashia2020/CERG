@@ -1,0 +1,5 @@
+numpy>=1.24
+scipy>=1.10
+mujoco>=3.0
+# drake — install via: pip install drake
+# See https://drake.mit.edu/pip.html for platform-specific instructions
