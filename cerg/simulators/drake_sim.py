@@ -20,6 +20,7 @@ from cerg.core.simulator import Simulator
 from cerg.core.state import RobotState
 
 try:
+    from pydrake.geometry import Meshcat, MeshcatVisualizer
     from pydrake.multibody.parsing import Parser
     from pydrake.multibody.plant import MultibodyPlant, AddMultibodyPlantSceneGraph
     from pydrake.multibody.tree import JacobianWrtVariable
@@ -33,19 +34,63 @@ except ImportError as e:
 
 
 class DrakeSimulator(Simulator):
-    """Wraps Drake MultibodyPlant as a CERG Simulator backend."""
+    """Wraps Drake MultibodyPlant as a CERG Simulator backend.
 
-    def __init__(self, robot: RobotModel, dt: float = 1e-3):
+    Parameters
+    ----------
+    robot : RobotModel
+        Robot description (provides URDF path, DOF counts, limits).
+    dt : float
+        Simulation timestep (seconds).
+    visualize : bool
+        If True, spin up a Meshcat server and connect a visualizer.
+        Access the URL via the ``meshcat`` property.
+    """
+
+    def __init__(self, robot: RobotModel, dt: float = 1e-3, visualize: bool = False):
         super().__init__(robot, dt)
 
         urdf_path = robot.urdf_path()
         if urdf_path is None:
             raise ValueError(f"Robot '{robot.name}' does not provide a URDF file.")
 
+        self._meshcat: Meshcat | None = None
+
         builder = DiagramBuilder()
         self._plant, self._scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=dt)
         Parser(self._plant).AddModels(str(urdf_path))
+
+        # URDF root links with no explicit world joint get a free quaternion
+        # joint in Drake.  Weld the base to world before Finalize so Drake
+        # treats it as a fixed-base robot.
+        self._plant.WeldFrames(
+            self._plant.world_frame(),
+            self._plant.GetFrameByName(robot.base_link_name),
+        )
+
+        # If the URDF already declares Drake-specific actuators (via
+        # <drake:joint_actuator> tags), respect them.  Otherwise, add one
+        # per revolute joint so the actuation input port has the right size.
+        model_instance = self._plant.GetModelInstanceByName(robot.name)
+        existing = sum(
+            1 for idx in self._plant.GetJointActuatorIndices(model_instance)
+        )
+        if existing < robot.nv:
+            for idx in self._plant.GetJointIndices(model_instance):
+                joint = self._plant.get_joint(idx)
+                if joint.type_name() == "revolute" and not any(
+                    self._plant.get_joint_actuator(a).joint() is joint
+                    for a in self._plant.GetJointActuatorIndices(model_instance)
+                ):
+                    self._plant.AddJointActuator(f"{joint.name()}_actuator", joint)
+
         self._plant.Finalize()
+
+        if visualize:
+            self._meshcat = Meshcat()
+            MeshcatVisualizer.AddToBuilder(
+                builder, self._scene_graph, self._meshcat
+            )
 
         self._diagram = builder.Build()
         self._sim = DrakeSimulatorEngine(self._diagram)
@@ -61,9 +106,23 @@ class DrakeSimulator(Simulator):
             f"Drake nv={self._plant.num_velocities()} != robot nv={robot.nv}"
         )
 
+    # -------------------------------------------------------------- #
+    #  Public accessors                                                #
+    # -------------------------------------------------------------- #
+
     @property
     def plant(self) -> MultibodyPlant:
         return self._plant
+
+    @property
+    def meshcat(self) -> Meshcat | None:
+        """Meshcat instance (None when visualize=False)."""
+        return self._meshcat
+
+    def publish(self) -> None:
+        """Push the current plant state to Meshcat (no-op if not visualising)."""
+        if self._meshcat is not None:
+            self._diagram.ForcedPublish(self._context)
 
     # -------------------------------------------------------------- #
     #  Internal: save/restore for stateless queries                    #

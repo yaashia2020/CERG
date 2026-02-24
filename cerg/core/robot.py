@@ -61,6 +61,14 @@ class RobotModel(ABC):
         so that simulator.get_body_position(name) works for any backend.
         """
 
+    @property
+    def base_link_name(self) -> str:
+        """Name of the root link that should be welded to the world.
+
+        Override if your URDF uses a different name for the fixed base.
+        """
+        return "base_link"
+
     @abstractmethod
     def urdf_path(self) -> Path | None:
         """Path to URDF file, or None if not available."""

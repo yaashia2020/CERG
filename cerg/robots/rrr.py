@@ -1,7 +1,8 @@
-"""RRR — 3-link planar revolute robot arm.
+"""RRR — 3-link revolute robot arm.
 
 The simplest possible verification target:
-  - 3 revolute joints rotating about Z
+  - Joint 1 rotates about Y (shoulder elevation — gives Z reach)
+  - Joints 2 & 3 rotate about Z (elbow/wrist bends)
   - Link lengths: 0.4, 0.3, 0.2 m
   - Both URDF (for Drake) and MJCF XML (for MuJoCo) provided
 """

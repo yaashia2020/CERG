@@ -1,5 +1,6 @@
-<!-- MuJoCo model for RRR Planar 3-Link Robot Arm
-     3 revolute joints, all rotating about the Z axis.
+<!-- MuJoCo model for RRR 3-Link Robot Arm
+     Joint 1 rotates about Y (shoulder elevation — gives Z reach).
+     Joints 2 & 3 rotate about Z (elbow/wrist bends).
      Link lengths: 0.4m, 0.3m, 0.2m
      Matches the URDF definition for cross-simulator verification.
 -->
@@ -23,7 +24,7 @@
 
       <!-- Link 1: 0.4 m -->
       <body name="link1" pos="0 0 0.05">
-        <joint name="joint1" type="hinge" axis="0 0 1" range="-3.14159 3.14159"
+        <joint name="joint1" type="hinge" axis="0 1 0" range="-3.14159 3.14159"
                damping="0.1"/>
         <geom name="link1_geom" type="capsule" fromto="0 0 0 0.4 0 0"
               size="0.03" mass="2.0"/>

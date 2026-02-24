@@ -3,8 +3,8 @@
 
 # ─── Controller gains ───
 # Used by BOTH the actual PD controller AND the CERG prediction loop.
-Kp: [100.0, 100.0, 100.0]
-Kd: [20.0, 20.0, 20.0]
+Kp: [10.0, 10.0, 20.0]
+Kd: [2.0, 2.0, 2.0]
 
 # ─── Joint velocity limits (symmetric: [-qd_max, qd_max]) ───
 qd_limits: [5.0, 5.0, 5.0]
