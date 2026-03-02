@@ -1,16 +1,11 @@
-"""Tests for the CERG algorithm on Drake with the RRR arm.
+"""Tests for the CERG algorithm on MuJoCo with the RRR arm.
 
-Requires PD controller tests to pass first (tests/test_pd.py).
-
-Tests:
-  1. CERG unit tests (construction, reset, step, DSM, navigation field)
-  2. CERG + PD closed-loop (unconstrained convergence, joint limits,
-     hard/soft constraints, smoothness, DSM behavior)
-
-Everything goes through the generic API — no raw Drake calls.
+Mirrors test_cerg.py.  Replaces DrakeSimulator with MuJoCoSimulator;
+sim.publish() and sim.draw_constraints() are omitted (MuJoCo has no
+Meshcat in this stack).
 
 Usage:
-    pytest tests/test_cerg.py -v
+    pytest tests/test_cerg_mujoco.py -v
 """
 
 from __future__ import annotations
@@ -25,8 +20,7 @@ from cerg.core.cerg.auxiliary_reference import CERG
 from cerg.core.cerg.constraints import HalfSpaceConstraint
 from cerg.controllers.pd import PDController
 from cerg.robots.rrr import RRRRobot
-from cerg.simulators.drake_sim import DrakeSimulator
-from cerg.viz import CERGHistory
+from cerg.simulators.mujoco_sim import MuJoCoSimulator
 
 # ------------------------------------------------------------------ #
 #  Fixtures                                                            #
@@ -41,11 +35,8 @@ def robot():
 
 
 @pytest.fixture(scope="module")
-def sim(robot, visualize):
-    s = DrakeSimulator(robot, dt=DT, visualize=visualize)
-    if visualize and s.meshcat is not None:
-        print(f"\nMeshcat URL: {s.meshcat.web_url()}")
-    return s
+def sim(robot):
+    return MuJoCoSimulator(robot, dt=DT)
 
 
 @pytest.fixture(scope="module")
@@ -103,7 +94,7 @@ class TestCERGUnit:
         assert rho.shape == (robot.nq,)
 
     def test_at_goal_qv_stays(self, sim, robot, config):
-        """When q_v == q_r, the navigation field attraction is ~zero, so q_v shouldn't move much."""
+        """When q_v == q_r, the navigation field attraction is ~zero."""
         cerg = CERG(sim, robot, config=config)
         q = np.array([0.3, 0.3, 0.3])
         cerg.reset(q.copy())
@@ -119,21 +110,16 @@ class TestCERGUnit:
 class TestPredictTrajectory:
     """Targeted tests for the DSM prediction loop.
 
-    Concern 1: are M, c, g evaluated at the correct (q, qd) inside the loop?
-    Concern 2: when does the Euler integration produce NaN, and why?
+    These tests are simulator-agnostic: they verify the Euler integration
+    and dynamics-call ordering using the MuJoCo backend.
     """
 
     def test_initial_state_stored_at_column_zero(self, sim, robot, config):
-        """pred.q[:,0] and pred.qd[:,0] must exactly match the inputs.
-
-        Uses prediction_horizon=0 so num_pred_steps=0 and the Euler loop
-        never runs — we only test the pre-loop setup that stores q0/qd0.
-        """
         import copy
         from cerg.core.cerg.dsm import predict_trajectory
 
         cfg = copy.copy(config)
-        cfg.prediction_horizon = 0.0  # num_pred_steps = int(0.0/0.01) = 0
+        cfg.prediction_horizon = 0.0
 
         q0  = np.array([0.3, -0.2, 0.5])
         qd0 = np.array([0.1, -0.1, 0.2])
@@ -146,19 +132,11 @@ class TestPredictTrajectory:
         assert_allclose(pred.qd[:, 0], qd0, atol=1e-12)
 
     def test_step1_matches_manual_euler(self, sim, robot, config):
-        """Manually compute step 1 and verify pred.q[:,1] and pred.qd[:,1] match.
-
-        This is the key test for Concern 1: if M/c/g are evaluated at the wrong
-        state inside the loop, the numbers here will disagree.
-
-        Uses prediction_horizon=prediction_dt so num_pred_steps=1 — only one
-        Euler step is taken, avoiding any later-step numerical drift.
-        """
         import copy
         from cerg.core.cerg.dsm import predict_trajectory
 
         cfg = copy.copy(config)
-        cfg.prediction_horizon = config.prediction_dt  # num_pred_steps = 1
+        cfg.prediction_horizon = config.prediction_dt  # one step
 
         q0  = np.array([0.1, 0.2,  0.3])
         qd0 = np.array([0.1, -0.1, 0.05])
@@ -186,11 +164,6 @@ class TestPredictTrajectory:
                         err_msg="qd step 1 mismatch — dynamics may be at wrong state")
 
     def test_equilibrium_stays_static(self, sim, robot, config):
-        """At q_v == q0 and qd0 == 0 the robot is at PD equilibrium.
-
-        tau - c - g = Kp*(q_v-q) - Kd*qd + g - c - g = 0, so qdd = 0.
-        Every predicted q should stay at q0 and every qd at zero.
-        """
         from cerg.core.cerg.dsm import predict_trajectory
 
         q0  = np.array([0.1, 0.2, -0.1])
@@ -206,17 +179,12 @@ class TestPredictTrajectory:
                             err_msg=f"qd drifted at step {k}")
 
     def test_dynamics_called_at_correct_states(self, sim, robot, config):
-        """Verify M, c, g are each called with the correct (q, qd) at every loop step.
+        """Verify M and c are called with the correct (q, qd) at every loop step.
 
-        Strategy: spy on the three dynamics methods to record the arguments they
-        receive, then compare those arguments against pred.q[:,k] / pred.qd[:,k].
-
-        At loop step k the dynamics must be called with the state *before* that
-        step's Euler update, i.e. pred.q[:,k] and pred.qd[:,k].
-
-        Pre-loop calls (energy, initial tau) are excluded from the check via a
-        +1 offset — they are always at q0 and are verified by
-        test_initial_state_stored_at_column_zero.
+        Note: get_gravity_vector call count is not checked here because
+        MuJoCoSimulator.get_coriolis_vector calls get_gravity_vector internally,
+        causing extra spy recordings vs the Drake implementation.  The Drake test
+        suite covers the g call-count assertion.
         """
         from unittest.mock import patch as mock_patch
         from cerg.core.cerg.dsm import predict_trajectory
@@ -228,11 +196,9 @@ class TestPredictTrajectory:
         M_q_args  = []
         c_q_args  = []
         c_qd_args = []
-        g_q_args  = []
 
         orig_M = sim.get_mass_matrix
         orig_c = sim.get_coriolis_vector
-        orig_g = sim.get_gravity_vector
 
         def spy_M(q):
             M_q_args.append(q.copy())
@@ -243,23 +209,15 @@ class TestPredictTrajectory:
             c_qd_args.append(qd.copy())
             return orig_c(q, qd)
 
-        def spy_g(q):
-            g_q_args.append(q.copy())
-            return orig_g(q)
-
         with mock_patch.object(sim, "get_mass_matrix",     side_effect=spy_M), \
-             mock_patch.object(sim, "get_coriolis_vector", side_effect=spy_c), \
-             mock_patch.object(sim, "get_gravity_vector",  side_effect=spy_g):
+             mock_patch.object(sim, "get_coriolis_vector", side_effect=spy_c):
             pred = predict_trajectory(q0=q0, qd0=qd0, q_v=q_v,
                                       simulator=sim, robot=robot, config=config)
 
         num_steps = config.num_pred_steps
 
-        # M and g are called once pre-loop (energy / initial tau), then num_steps
-        # times inside the loop.  c is only called inside the loop.
-        assert len(M_q_args)  == num_steps + 1, "unexpected get_mass_matrix call count"
-        assert len(g_q_args)  == num_steps + 1, "unexpected get_gravity_vector call count"
-        assert len(c_q_args)  == num_steps,     "unexpected get_coriolis_vector call count"
+        assert len(M_q_args) == num_steps + 1, "unexpected get_mass_matrix call count"
+        assert len(c_q_args) == num_steps,     "unexpected get_coriolis_vector call count"
 
         for k in range(num_steps):
             expected_q  = pred.q[:,  k]
@@ -267,22 +225,12 @@ class TestPredictTrajectory:
 
             assert_allclose(M_q_args[k + 1], expected_q, atol=1e-12,
                             err_msg=f"get_mass_matrix step {k}: wrong q")
-            assert_allclose(g_q_args[k + 1], expected_q, atol=1e-12,
-                            err_msg=f"get_gravity_vector step {k}: wrong q")
             assert_allclose(c_q_args[k],  expected_q,  atol=1e-12,
                             err_msg=f"get_coriolis_vector step {k}: wrong q")
             assert_allclose(c_qd_args[k], expected_qd, atol=1e-12,
                             err_msg=f"get_coriolis_vector step {k}: wrong qd")
 
     def test_nan_diagnostic_high_velocity(self, sim, robot, config):
-        """NaN diagnostic for Concern 2: isolates the Euler integration from Drake.
-
-        Patches all Drake-side calls with simple stubs (M = 0.5*I, c = 0, g = 0)
-        so SetPositions never sees NaN/Inf. After the call we inspect pred.q and
-        pred.qd directly and report the exact step and values where divergence occurs.
-
-        Parametrise qd0 here to find the threshold that causes instability.
-        """
         from unittest.mock import patch as mock_patch
         from cerg.core.cerg.dsm import predict_trajectory
 
@@ -293,7 +241,7 @@ class TestPredictTrajectory:
         zero_bodies = np.zeros((3, num_bodies))
 
         q0  = np.array([0.0, 0.0, 0.0])
-        qd0 = np.array([3.0, 3.0, 3.0])   # increase this to stress-test
+        qd0 = np.array([3.0, 3.0, 3.0])
         q_v = np.array([0.5, -0.3, 0.8])
 
         with mock_patch.object(sim, "get_mass_matrix",        return_value=M_stub), \
@@ -317,7 +265,7 @@ class TestPredictTrajectory:
 
 
 # ------------------------------------------------------------------ #
-#  CERG + PD + Drake closed-loop                                       #
+#  CERG + PD + MuJoCo closed-loop                                      #
 # ------------------------------------------------------------------ #
 
 
@@ -338,7 +286,6 @@ class TestCERGClosedLoop:
                 q_v = cerg.step(state.q, state.qd, q_r)
                 tau = controller.compute(state, q_v)
                 sim.step(tau)
-                sim.publish()
 
         state = sim.get_state()
         assert_allclose(state.q, q_r, atol=0.05)
@@ -358,7 +305,6 @@ class TestCERGClosedLoop:
             q_v = cerg.step(state.q, state.qd, q_r)
             tau = controller.compute(state, q_v)
             sim.step(tau)
-            sim.publish()
 
         state = sim.get_state()
         for i in range(robot.nv):
@@ -369,17 +315,12 @@ class TestCERGClosedLoop:
                 f"Joint {i} above upper limit: {state.q[i]} > {robot.q_upper[i]}"
             )
 
-    def test_with_hard_constraint(self, sim, robot, config, controller, visualize):
+    def test_with_hard_constraint(self, sim, robot, config, controller):
         """CERG should keep the arm behind a hard wall constraint.
 
-        Setup geometry (link lengths: 0.4, 0.3, 0.2 m; joint axes: Y, Z, Z):
-          q0 = [pi/2, 0, 0] — joint1 lifts arm upward (+Z), all body-frame
-               origins land at x≈0, which is safely behind the wall.
-          q_r = [0, 0, 0]   — arm extended along +X: joint3 at x=0.7 and
-               tip at x=0.9, both beyond the wall at x=0.6.
-
-        CERG should freeze q_v before the predicted trajectory crosses x=0.6
-        (d_hard goes to zero) so the actual tip never reaches the wall.
+        Same geometry as the Drake version:
+          q0 = [pi/2, 0, 0] — arm pointing up, all bodies at x≈0 (safe).
+          q_r = [0, 0, 0]   — arm along +X: tip at x=0.9, beyond wall x=0.6.
         """
         wall_x = 0.6
         wall = HalfSpaceConstraint(
@@ -389,54 +330,34 @@ class TestCERGClosedLoop:
         )
         cerg = CERG(sim, robot, constraints=[wall], config=config)
 
-        # Arm pointing upward: all FK body-frame origins at x≈0 (safe side)
         q0 = np.array([np.pi / 2, 0.0, 0.0])
-        # Goal beyond the wall: FK tip at x=0.9 (unsafe side)
         q_r = np.array([0.0, 0.0, 0.0])
 
-        # Sanity-check our geometry assumptions
+        # Sanity-check geometry
         tip_q0 = sim.get_body_position("tip", q=q0)
         tip_qr = sim.get_body_position("tip", q=q_r)
         assert tip_q0[0] < wall_x, (
-            f"q0 FK tip x={tip_q0[0]:.3f} is NOT behind wall at x={wall_x}; "
-            "test geometry is invalid"
+            f"q0 FK tip x={tip_q0[0]:.3f} is NOT behind wall at x={wall_x}"
         )
         assert tip_qr[0] > wall_x, (
-            f"q_r FK tip x={tip_qr[0]:.3f} is NOT beyond wall at x={wall_x}; "
-            "test geometry is invalid"
+            f"q_r FK tip x={tip_qr[0]:.3f} is NOT beyond wall at x={wall_x}"
         )
 
         sim.reset(q0=q0)
         cerg.reset(q0.copy())
-        sim.draw_constraints([wall])    # no-op when visualize=False
-        history = CERGHistory() if visualize else None
 
         for _ in range(2000):
             state = sim.get_state()
             q_v = cerg.step(state.q, state.qd, q_r)
             tau = controller.compute(state, q_v)
             sim.step(tau)
-            sim.publish()
-            if history is not None:
-                history.record(
-                    t=state.t, q=state.q, qd=state.qd,
-                    q_v=q_v, q_r=q_r, tau=tau, dsm=cerg.last_dsm,
-                )
 
         tip_pos = sim.get_body_position("tip")
         assert tip_pos[0] <= wall_x + 0.05, (
             f"Tip x={tip_pos[0]:.3f} exceeded wall at x={wall_x}"
         )
 
-        if history is not None:
-            history.plot(
-                q_lower=robot.q_lower, q_upper=robot.q_upper,
-                qd_limit=config.qd_limits, tau_limit=robot.tau_max,
-                joint_names=[j.name for j in robot.joints],
-                title="RRR — hard wall test",
-            )
-
-    def test_with_soft_constraint(self, sim, robot, config, controller, visualize):
+    def test_with_soft_constraint(self, sim, robot, config, controller):
         """Soft constraint: arm should slow down and respect it (energy-coupled)."""
         wall = HalfSpaceConstraint(
             normal=np.array([1.0, 0.0, 0.0]),
@@ -450,33 +371,17 @@ class TestCERGClosedLoop:
 
         sim.reset(q0=q0)
         cerg.reset(q0.copy())
-        sim.draw_constraints([wall])    # no-op when visualize=False
-        history = CERGHistory() if visualize else None
 
         for _ in range(2000):
             state = sim.get_state()
             q_v = cerg.step(state.q, state.qd, q_r)
             tau = controller.compute(state, q_v)
             sim.step(tau)
-            sim.publish()
-            if history is not None:
-                history.record(
-                    t=state.t, q=state.q, qd=state.qd,
-                    q_v=q_v, q_r=q_r, tau=tau, dsm=cerg.last_dsm,
-                )
 
         tip_pos = sim.get_body_position("tip")
         assert tip_pos[0] <= 0.75, (
             f"Tip x={tip_pos[0]:.3f} should respect soft wall at x=0.7"
         )
-
-        if history is not None:
-            history.plot(
-                q_lower=robot.q_lower, q_upper=robot.q_upper,
-                qd_limit=config.qd_limits, tau_limit=robot.tau_max,
-                joint_names=[j.name for j in robot.joints],
-                title="RRR — soft wall test",
-            )
 
     def test_qv_never_jumps(self, sim, robot, config, controller):
         """q_v should evolve smoothly — no discontinuous jumps."""
@@ -498,7 +403,6 @@ class TestCERGClosedLoop:
             q_v_prev = q_v.copy()
             tau = controller.compute(state, q_v)
             sim.step(tau)
-            sim.publish()
 
         assert max_jump < 0.1, f"q_v jumped {max_jump:.4f} in one step"
 
@@ -519,7 +423,6 @@ class TestCERGClosedLoop:
             dsm_values.append(cerg.last_dsm)
             tau = controller.compute(state, cerg.q_v)
             sim.step(tau)
-            sim.publish()
 
         assert all(d >= 0.0 for d in dsm_values), "DSM went negative"
         assert dsm_values[0] > 0.0, "Initial DSM should be positive"

@@ -20,17 +20,60 @@ except ImportError as e:
     raise ImportError("MuJoCo is required: pip install mujoco>=3.0") from e
 
 
+def _load_mujoco_model(robot: RobotModel) -> "mujoco.MjModel":
+    """Load a MuJoCo model from the robot's MJCF or URDF file.
+
+    Loading order:
+      1. Native MJCF via robot.mjcf_path() — used as-is.
+      2. URDF via robot.urdf_path() — two transforms applied before loading:
+           a. Strip the xmlns:drake namespace declaration and any <drake:…>
+              child elements (Drake-specific, unknown to MuJoCo).
+           b. Inject <mujoco><compiler fusestatic="false"/></mujoco> so that
+              massless fixed-joint leaves (e.g. the "tip" frame) are kept as
+              separate bodies rather than merged into their parent.
+    """
+    import re
+
+    mjcf_path = robot.mjcf_path()
+    if mjcf_path is not None:
+        return mujoco.MjModel.from_xml_path(str(mjcf_path))
+
+    urdf_path = robot.urdf_path()
+    if urdf_path is None:
+        raise ValueError(
+            f"Robot '{robot.name}' provides neither a MuJoCo XML nor a URDF file."
+        )
+
+    xml = urdf_path.read_text()
+
+    # Strip xmlns:drake namespace declaration
+    xml = re.sub(r'\s+xmlns:drake="[^"]*"', "", xml)
+
+    # Strip any <drake:…> elements (self-closing or with children)
+    xml = re.sub(r"<drake:[^/]*/?>.*?</drake:[^>]+>", "", xml, flags=re.DOTALL)
+    xml = re.sub(r"<drake:[^>]*/?>", "", xml)
+
+    # Inject fusestatic=false so fixed-joint leaves are not merged away
+    xml = xml.replace(
+        "</robot>",
+        "  <mujoco><compiler fusestatic=\"false\"/></mujoco>\n</robot>",
+    )
+
+    return mujoco.MjModel.from_xml_string(xml)
+
+
 class MuJoCoSimulator(Simulator):
-    """Wraps MuJoCo as a CERG Simulator backend."""
+    """Wraps MuJoCo as a CERG Simulator backend.
+
+    Accepts robots that provide either a native MuJoCo XML (mjcf_path) or a
+    URDF (urdf_path).  When loading from URDF, Drake-specific tags are stripped
+    and fusestatic is disabled so all named link frames survive as bodies.
+    """
 
     def __init__(self, robot: RobotModel, dt: float = 1e-3):
         super().__init__(robot, dt)
 
-        mjcf_path = robot.mjcf_path()
-        if mjcf_path is None:
-            raise ValueError(f"Robot '{robot.name}' does not provide a MuJoCo XML file.")
-
-        self._model = mujoco.MjModel.from_xml_path(str(mjcf_path))
+        self._model = _load_mujoco_model(robot)
         self._model.opt.timestep = dt
         self._data = mujoco.MjData(self._model)
 
@@ -97,7 +140,9 @@ class MuJoCoSimulator(Simulator):
 
     def step(self, tau: np.ndarray) -> RobotState:
         tau_clipped = np.clip(tau, -self._robot.tau_max, self._robot.tau_max)
-        self._data.ctrl[:] = tau_clipped
+        # Apply torques as direct generalized forces (works with or without
+        # actuator definitions in the model file).
+        self._data.qfrc_applied[:self._robot.nv] = tau_clipped
         mujoco.mj_step(self._model, self._data)
         return self._build_state(tau_clipped)
 

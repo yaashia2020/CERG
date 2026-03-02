@@ -22,5 +22,8 @@ dev = ["pytest", "pytest-cov", "ruff"]
 [tool.setuptools.packages.find]
 include = ["cerg*"]
 
+[tool.pytest.ini_options]
+addopts = "-v"
+
 [tool.ruff]
 line-length = 100

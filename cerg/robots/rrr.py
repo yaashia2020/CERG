@@ -4,7 +4,7 @@ The simplest possible verification target:
   - Joint 1 rotates about Y (shoulder elevation — gives Z reach)
   - Joints 2 & 3 rotate about Z (elbow/wrist bends)
   - Link lengths: 0.4, 0.3, 0.2 m
-  - Both URDF (for Drake) and MJCF XML (for MuJoCo) provided
+  - URDF is the single source of truth for both Drake and MuJoCo
 """
 
 from __future__ import annotations
@@ -48,5 +48,4 @@ class RRRRobot(RobotModel):
         return p if p.exists() else None
 
     def mjcf_path(self) -> Path | None:
-        p = _MODELS_DIR / "rrr.xml"
-        return p if p.exists() else None
+        return None  # URDF is the single source; MuJoCoSimulator loads from urdf_path()

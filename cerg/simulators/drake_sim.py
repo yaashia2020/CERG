@@ -33,6 +33,42 @@ except ImportError as e:
     ) from e
 
 
+def _rotation_z_to(normal: np.ndarray) -> "RotationMatrix":
+    """RotationMatrix that rotates the local Z axis to align with *normal*.
+
+    Used by draw_constraints() to orient a thin box so its face is
+    perpendicular to the constraint's outward normal.
+
+    Handles the two degenerate cases (normal parallel/anti-parallel to Z)
+    and uses the Rodrigues formula for all other directions.
+    """
+    from pydrake.math import RotationMatrix
+
+    n = np.asarray(normal, dtype=float)
+    n = n / np.linalg.norm(n)
+    z = np.array([0.0, 0.0, 1.0])
+
+    if np.allclose(n, z):
+        return RotationMatrix()
+    if np.allclose(n, -z):
+        return RotationMatrix.MakeXRotation(np.pi)
+
+    # Rodrigues: axis = Z × n,  angle = arccos(Z · n)
+    axis  = np.cross(z, n)
+    sin_a = np.linalg.norm(axis)
+    cos_a = float(np.dot(z, n))
+    axis  = axis / sin_a
+
+    # Skew-symmetric matrix K, then R = I + sin·K + (1-cos)·K²
+    K = np.array([
+        [ 0.0,     -axis[2],  axis[1]],
+        [ axis[2],  0.0,     -axis[0]],
+        [-axis[1],  axis[0],  0.0   ],
+    ])
+    R = np.eye(3) + sin_a * K + (1.0 - cos_a) * (K @ K)
+    return RotationMatrix(R)
+
+
 class DrakeSimulator(Simulator):
     """Wraps Drake MultibodyPlant as a CERG Simulator backend.
 
@@ -242,3 +278,46 @@ class DrakeSimulator(Simulator):
                 pose = self._plant.EvalBodyPoseInWorld(self._plant_context, body)
                 result[:, i] = pose.translation()
             return result
+
+    # -------------------------------------------------------------- #
+    #  Constraint visualisation                                        #
+    # -------------------------------------------------------------- #
+
+    def draw_constraints(
+        self,
+        constraints: list,
+        panel_size: float = 2.0,
+        thickness: float = 0.005,
+    ) -> None:
+        """Draw constraints as translucent panels in Meshcat.
+
+        No-op when visualize=False.  Hard constraints are red, soft are
+        yellow.  Currently handles HalfSpaceConstraint only; unknown
+        constraint types are skipped silently.
+
+        Parameters
+        ----------
+        constraints : list of Constraint
+        panel_size  : width and height of the visual panel (metres)
+        thickness   : depth of the panel (metres)
+        """
+        if self._meshcat is None:
+            return
+
+        from pydrake.geometry import Box, Rgba
+        from pydrake.math import RigidTransform
+
+        for idx, c in enumerate(constraints):
+            if not (hasattr(c, "normal") and hasattr(c, "offset")):
+                continue  # skip unsupported constraint types
+
+            n      = np.asarray(c.normal, dtype=float)
+            center = float(c.offset) * n
+            R      = _rotation_z_to(n)
+            color  = (Rgba(0.9, 0.1, 0.1, 0.25) if c.kind == "hard"
+                      else Rgba(0.9, 0.8, 0.1, 0.25))
+            path   = f"/cerg_constraints/{c.kind}_{idx}"
+            self._meshcat.SetObject(
+                path, Box(panel_size, panel_size, thickness), color
+            )
+            self._meshcat.SetTransform(path, RigidTransform(R, center))

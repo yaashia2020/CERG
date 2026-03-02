@@ -84,6 +84,17 @@ class HalfSpaceConstraint(Constraint):
         if self.kind not in ("soft", "hard"):
             raise ValueError(f"Constraint kind must be 'soft' or 'hard', got '{self.kind}'")
 
+    def move_to(self, offset: float) -> None:
+        """Shift the constraint plane to a new offset along its normal.
+
+        Use this in the control loop to track a moving obstacle:
+
+            for _ in range(N):
+                wall.move_to(sim.get_body_position("obstacle")[0])
+                q_v = cerg.step(state.q, state.qd, q_r)
+        """
+        self.offset = float(offset)
+
     def signed_distance(self, point: np.ndarray) -> float:
         """offset - n^T * p.  Positive = safe, negative = violated."""
         return float(self.offset - np.dot(self.normal, point))
