@@ -41,7 +41,11 @@ class RRRRobot(RobotModel):
 
     @property
     def body_names(self) -> list[str]:
-        return ["link1", "link2", "link3"]
+        return ["link1", "link2", "link3", "tip"]
+
+    @property
+    def end_effectors(self) -> list[str]:
+        return ["tip"]
 
     def urdf_path(self) -> Path | None:
         p = _MODELS_DIR / "rrr.urdf"

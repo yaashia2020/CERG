@@ -103,21 +103,14 @@ def predict_trajectory(
         M = simulator.get_mass_matrix(q)
         c = simulator.get_coriolis_vector(q, qd)
         g = simulator.get_gravity_vector(q)
-        print("step", k)
-        print("M: ", M)
-        print("c: ", c)
-        print("g: ", g)
+
         tau = Kp * (q_v[:nv] - q[:nv]) - Kd * qd[:nv] + g[:nv]
-        print("tau: ", tau)
+
         qdd = np.linalg.pinv(M) @ (tau - c - g)
-        print("tau - c - g: ", tau - c - g)
-        print("pseduinv M", np.linalg.pinv(M))
-        print("qdd: ", qdd)
+  
         qd = qd + qdd * pred_dt
         q = q + qd * pred_dt
-        print("qd: ", qd)
-        print("q: ", q)
-        print("-----")
+
         q_list[:, k + 1] = q
         qd_list[:, k + 1] = qd
         tau_list[:, k + 1] = tau

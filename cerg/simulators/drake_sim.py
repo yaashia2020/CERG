@@ -321,3 +321,23 @@ class DrakeSimulator(Simulator):
                 path, Box(panel_size, panel_size, thickness), color
             )
             self._meshcat.SetTransform(path, RigidTransform(R, center))
+
+    def draw_goal(
+        self,
+        q_r: np.ndarray,
+        body_name: str = "tip",
+        radius: float = 0.03,
+    ) -> None:
+        """Draw a red sphere at the world-frame FK position of body_name at q_r.
+
+        No-op when visualize=False.
+        """
+        if self._meshcat is None:
+            return
+
+        from pydrake.geometry import Rgba, Sphere
+        from pydrake.math import RigidTransform
+
+        pos = self.get_body_position(body_name, q=q_r)
+        self._meshcat.SetObject("/cerg_goal", Sphere(radius), Rgba(1.0, 0.0, 0.0, 0.9))
+        self._meshcat.SetTransform("/cerg_goal", RigidTransform(pos))

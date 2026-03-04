@@ -69,6 +69,16 @@ class RobotModel(ABC):
         """
         return "base_link"
 
+    @property
+    def end_effectors(self) -> list[str]:
+        """Body names treated as end-effectors for visualisation.
+
+        Override in concrete subclasses to specify one or more bodies whose
+        world-frame trajectories should be plotted by CERGHistory.
+        Defaults to empty (no end-effector plots).
+        """
+        return []
+
     @abstractmethod
     def urdf_path(self) -> Path | None:
         """Path to URDF file, or None if not available."""

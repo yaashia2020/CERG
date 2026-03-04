@@ -37,4 +37,4 @@ kappa_hard: 1.0             # scaling for hard constraint DSM
 kappa_energy: 1.0
 
 # ─── Energy constraint ───
-E_max: 5.0
+E_max: 0.50

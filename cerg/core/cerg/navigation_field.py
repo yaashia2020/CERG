@@ -94,7 +94,7 @@ def _constraint_repulsion(
 
     body_names = robot.body_names
     body_positions = simulator.get_all_body_positions(body_names, q=q_v)
-
+    
     for i, body_name in enumerate(body_names):
         body_pos = body_positions[:, i]
 

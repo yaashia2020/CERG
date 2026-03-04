@@ -358,30 +358,63 @@ class TestCERGClosedLoop:
         )
 
     def test_with_soft_constraint(self, sim, robot, config, controller):
-        """Soft constraint: arm should slow down and respect it (energy-coupled)."""
+        """Soft constraint: whenever any body crosses x=0.7, energy must be < E_max.
+
+        Same geometry as the Drake version:
+          q0 = [pi/2, 0, 0] — arm pointing up, all bodies at x≈0 (safe).
+          q_r = [0, 0, 0]   — arm along +X: tip at x≈0.9, beyond wall x=0.7.
+        """
+        wall_x = 0.7
         wall = HalfSpaceConstraint(
             normal=np.array([1.0, 0.0, 0.0]),
-            offset=0.7,
+            offset=wall_x,
             kind="soft",
         )
         cerg = CERG(sim, robot, constraints=[wall], config=config)
 
-        q0 = np.array([0.0, 0.0, 0.0])
-        q_r = np.array([0.0, -1.0, 0.0])
+        q0 = np.array([np.pi / 2, 0.0, 0.0])   # arm up: tip at x≈0
+        q_r = np.array([0.0, 0.0, 0.0])          # arm extended: tip at x≈0.9
+
+        # Sanity-check geometry
+        tip_q0 = sim.get_body_position("tip", q=q0)
+        tip_qr = sim.get_body_position("tip", q=q_r)
+        assert tip_q0[0] < wall_x, (
+            f"q0 FK tip x={tip_q0[0]:.3f} is NOT behind wall at x={wall_x}"
+        )
+        assert tip_qr[0] > wall_x, (
+            f"q_r FK tip x={tip_qr[0]:.3f} is NOT beyond wall at x={wall_x}"
+        )
 
         sim.reset(q0=q0)
         cerg.reset(q0.copy())
 
-        for _ in range(2000):
+        Kp = np.broadcast_to(np.asarray(config.Kp, dtype=float), (robot.nv,))
+        violations = []   # (body_name, signed_dist, energy) when boundary is crossed
+
+        for _ in range(7000):
             state = sim.get_state()
             q_v = cerg.step(state.q, state.qd, q_r)
+
+            # Energy at current state: E = 0.5*qd@M@qd + 0.5*(q_v-q)@Kp@(q_v-q)
+            M = sim.get_mass_matrix(state.q)
+            pos_err = q_v[:robot.nv] - state.q[:robot.nv]
+            energy = 0.5 * state.qd @ M @ state.qd + 0.5 * pos_err @ np.diag(Kp) @ pos_err
+
+            body_pos = sim.get_all_body_positions(robot.body_names, q=state.q)
+            for i, name in enumerate(robot.body_names):
+                d = wall.signed_distance(body_pos[:, i])
+                if d < 0:
+                    violations.append((name, d, energy))
+
             tau = controller.compute(state, q_v)
             sim.step(tau)
 
-        tip_pos = sim.get_body_position("tip")
-        assert tip_pos[0] <= 0.75, (
-            f"Tip x={tip_pos[0]:.3f} should respect soft wall at x=0.7"
-        )
+        # Soft-constraint invariant: any boundary crossing must have E < E_max
+        for body_name, d, energy in violations:
+            assert energy < config.E_max, (
+                f"Body '{body_name}' violated constraint (d={d:.4f}) "
+                f"but energy {energy:.4f} >= E_max={config.E_max:.4f}"
+            )
 
     def test_qv_never_jumps(self, sim, robot, config, controller):
         """q_v should evolve smoothly — no discontinuous jumps."""

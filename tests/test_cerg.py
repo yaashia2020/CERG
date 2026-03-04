@@ -26,7 +26,7 @@ from cerg.core.cerg.constraints import HalfSpaceConstraint
 from cerg.controllers.pd import PDController
 from cerg.robots.rrr import RRRRobot
 from cerg.simulators.drake_sim import DrakeSimulator
-from cerg.viz import CERGHistory
+from cerg.viz import CERGHistory, open_meshcat
 
 # ------------------------------------------------------------------ #
 #  Fixtures                                                            #
@@ -43,8 +43,8 @@ def robot():
 @pytest.fixture(scope="module")
 def sim(robot, visualize):
     s = DrakeSimulator(robot, dt=DT, visualize=visualize)
-    if visualize and s.meshcat is not None:
-        print(f"\nMeshcat URL: {s.meshcat.web_url()}")
+    if visualize:
+        open_meshcat(s)
     return s
 
 
@@ -409,18 +409,22 @@ class TestCERGClosedLoop:
         sim.reset(q0=q0)
         cerg.reset(q0.copy())
         sim.draw_constraints([wall])    # no-op when visualize=False
+        sim.draw_goal(q_r)              # no-op when visualize=False
         history = CERGHistory() if visualize else None
 
-        for _ in range(2000):
+        for _ in range(12000):
             state = sim.get_state()
             q_v = cerg.step(state.q, state.qd, q_r)
             tau = controller.compute(state, q_v)
             sim.step(tau)
             sim.publish()
             if history is not None:
+                ee_pos = {name: sim.get_body_position(name, q=state.q)
+                          for name in robot.end_effectors}
                 history.record(
                     t=state.t, q=state.q, qd=state.qd,
                     q_v=q_v, q_r=q_r, tau=tau, dsm=cerg.last_dsm,
+                    ee_pos=ee_pos,
                 )
 
         tip_pos = sim.get_body_position("tip")
@@ -433,49 +437,101 @@ class TestCERGClosedLoop:
                 q_lower=robot.q_lower, q_upper=robot.q_upper,
                 qd_limit=config.qd_limits, tau_limit=robot.tau_max,
                 joint_names=[j.name for j in robot.joints],
+                constraints=[wall],
+                E_max=config.E_max,
                 title="RRR — hard wall test",
             )
+            input("\nGraphs open — press Enter to close and finish test...")
 
     def test_with_soft_constraint(self, sim, robot, config, controller, visualize):
-        """Soft constraint: arm should slow down and respect it (energy-coupled)."""
+        """Soft constraint: whenever any body crosses x=0.7, energy must be < E_max.
+
+        Setup geometry (same as hard-wall test):
+          q0 = [pi/2, 0, 0] — arm pointing upward, all bodies at x≈0 (safe side)
+          q_r = [0, 0, 0]   — arm extended along +X: tip at x≈0.9 (beyond wall)
+
+        For a soft constraint CERG allows the arm to approach the boundary only
+        while the current energy E < E_max.  The assertion checks this invariant:
+        if any body crosses x=0.7 at any timestep, the energy at that step must
+        have been < E_max.
+        """
+        wall_x = 0.7
         wall = HalfSpaceConstraint(
             normal=np.array([1.0, 0.0, 0.0]),
-            offset=0.7,
+            offset=wall_x,
             kind="soft",
         )
         cerg = CERG(sim, robot, constraints=[wall], config=config)
 
-        q0 = np.array([0.0, 0.0, 0.0])
-        q_r = np.array([0.0, -1.0, 0.0])
+        q0 = np.array([np.pi / 2, 0.0, 0.0])   # arm up: tip at x≈0
+        q_r = np.array([0.0, 0.0, 0.0])          # arm extended: tip at x≈0.9
+
+        # Sanity-check geometry
+        tip_q0 = sim.get_body_position("tip", q=q0)
+        tip_qr = sim.get_body_position("tip", q=q_r)
+        assert tip_q0[0] < wall_x, (
+            f"q0 FK tip x={tip_q0[0]:.3f} is NOT behind wall at x={wall_x}; "
+            "test geometry is invalid"
+        )
+        assert tip_qr[0] > wall_x, (
+            f"q_r FK tip x={tip_qr[0]:.3f} is NOT beyond wall at x={wall_x}; "
+            "test geometry is invalid"
+        )
 
         sim.reset(q0=q0)
         cerg.reset(q0.copy())
-        sim.draw_constraints([wall])    # no-op when visualize=False
+        sim.draw_constraints([wall])
+        sim.draw_goal(q_r)
         history = CERGHistory() if visualize else None
 
-        for _ in range(2000):
+        Kp = np.broadcast_to(np.asarray(config.Kp, dtype=float), (robot.nv,))
+        violations = []   # (body_name, signed_dist, energy) when boundary is crossed
+
+        for _ in range(7000):
             state = sim.get_state()
             q_v = cerg.step(state.q, state.qd, q_r)
+
+            # Energy at current state: E = 0.5*qd@M@qd + 0.5*(q_v-q)@Kp@(q_v-q)
+            M = sim.get_mass_matrix(state.q)
+            pos_err = q_v[:robot.nv] - state.q[:robot.nv]
+            energy = 0.5 * state.qd @ M @ state.qd + 0.5 * pos_err @ np.diag(Kp) @ pos_err
+
+            # Record constraint violations and end-effector positions
+            body_pos = sim.get_all_body_positions(robot.body_names, q=state.q)
+            for i, name in enumerate(robot.body_names):
+                d = wall.signed_distance(body_pos[:, i])
+                if d < 0:
+                    violations.append((name, d, energy))
+
             tau = controller.compute(state, q_v)
             sim.step(tau)
             sim.publish()
             if history is not None:
+                ee_pos = {
+                    name: body_pos[:, robot.body_names.index(name)]
+                    for name in robot.end_effectors
+                }
                 history.record(
                     t=state.t, q=state.q, qd=state.qd,
-                    q_v=q_v, q_r=q_r, tau=tau, dsm=cerg.last_dsm,
+                    q_v=q_v, q_r=q_r, tau=tau, dsm=cerg.last_dsm, energy=energy,
+                    ee_pos=ee_pos,
                 )
-
-        tip_pos = sim.get_body_position("tip")
-        assert tip_pos[0] <= 0.75, (
-            f"Tip x={tip_pos[0]:.3f} should respect soft wall at x=0.7"
-        )
 
         if history is not None:
             history.plot(
                 q_lower=robot.q_lower, q_upper=robot.q_upper,
                 qd_limit=config.qd_limits, tau_limit=robot.tau_max,
                 joint_names=[j.name for j in robot.joints],
+                constraints=[wall],
+                E_max=config.E_max,
                 title="RRR — soft wall test",
+            )
+
+        # Soft-constraint invariant: any boundary crossing must have E < E_max
+        for body_name, d, energy in violations:
+            assert energy < config.E_max, (
+                f"Body '{body_name}' violated constraint (d={d:.4f}) "
+                f"but energy {energy:.4f} >= E_max={config.E_max:.4f}"
             )
 
     def test_qv_never_jumps(self, sim, robot, config, controller):

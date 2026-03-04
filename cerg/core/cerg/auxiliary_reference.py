@@ -69,8 +69,25 @@ class CERG:
         return self._config
 
     def reset(self, q_v0: np.ndarray) -> None:
-        """Set the initial auxiliary reference."""
-        self._q_v = np.asarray(q_v0, dtype=float).copy()
+        """Set the initial auxiliary reference.
+
+        Raises ValueError if any robot body violates a constraint at q_v0.
+        """
+        q_v0 = np.asarray(q_v0, dtype=float).copy()
+
+        if self._constraints:
+            body_names = self._robot.body_names
+            body_pos = self._sim.get_all_body_positions(body_names, q=q_v0)  # (3, num_bodies)
+            for c in self._constraints:
+                for i, name in enumerate(body_names):
+                    d = c.signed_distance(body_pos[:, i])
+                    if d < 0:
+                        raise ValueError(
+                            f"Initial configuration violates {c.kind} constraint: "
+                            f"body '{name}' signed distance {d:.4f} < 0"
+                        )
+
+        self._q_v = q_v0
         self._last_dsm = 0.0
         self._last_rho = None
 

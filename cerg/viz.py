@@ -50,6 +50,22 @@ from dataclasses import dataclass
 import numpy as np
 
 
+def open_meshcat(sim, *, prompt: str = "\nOpen the Meshcat URL in your browser, then press Enter to start...") -> None:
+    """Print the Meshcat URL and wait for the user to open it.
+
+    No-op when ``sim.meshcat`` is None (i.e. visualize=False).
+
+    Parameters
+    ----------
+    sim    : DrakeSimulator (or any object with a .meshcat attribute)
+    prompt : text shown to the user before blocking on input()
+    """
+    if getattr(sim, "meshcat", None) is None:
+        return
+    print(f"\nMeshcat URL: {sim.meshcat.web_url()}")
+    input(prompt)
+
+
 # ──────────────────────────────────────────────────────────────────────── #
 #  Data storage                                                             #
 # ──────────────────────────────────────────────────────────────────────── #
@@ -65,6 +81,7 @@ class _Step:
     dsm: float
     energy: float | None
     soft_contact: bool
+    ee_pos: dict | None  # {body_name: (3,) world position}
 
 
 class CERGHistory:
@@ -93,6 +110,7 @@ class CERGHistory:
         dsm: float,
         energy: float | None = None,
         soft_contact: bool = False,
+        ee_pos: dict | None = None,
     ) -> None:
         """Append one timestep of data.
 
@@ -110,6 +128,8 @@ class CERGHistory:
                         to populate the energy panel.
         soft_contact  : set True when any soft-constraint signed distance ≤ 0
                         to place a vertical marker on the energy panel.
+        ee_pos        : dict mapping end-effector body name → (3,) world position.
+                        Pass robot.end_effectors positions to populate the EE plot.
         """
         self._steps.append(_Step(
             t=float(t),
@@ -121,6 +141,8 @@ class CERGHistory:
             dsm=float(dsm),
             energy=float(energy) if energy is not None else None,
             soft_contact=bool(soft_contact),
+            ee_pos={k: np.asarray(v, dtype=float).copy() for k, v in ee_pos.items()}
+                   if ee_pos is not None else None,
         ))
 
     def clear(self) -> None:
@@ -173,6 +195,25 @@ class CERGHistory:
         """Times (s) at which ``soft_contact=True`` was recorded."""
         return np.array([s.t for s in self._steps if s.soft_contact])
 
+    def ee_positions(self, name: str) -> np.ndarray:
+        """World positions of end-effector *name* over time, shape (3, N).
+
+        Returns None if no step has ee_pos recorded for this name.
+        """
+        vals = [s.ee_pos.get(name) for s in self._steps
+                if s.ee_pos is not None and name in s.ee_pos]
+        if not vals:
+            return None
+        return np.stack(vals, axis=1)  # (3, N)
+
+    def ee_names(self) -> list[str]:
+        """Sorted list of end-effector names that have recorded data."""
+        names = set()
+        for s in self._steps:
+            if s.ee_pos:
+                names.update(s.ee_pos.keys())
+        return sorted(names)
+
     # ── Plotting ──────────────────────────────────────────────────────── #
 
     def plot(
@@ -184,6 +225,8 @@ class CERGHistory:
         tau_limit: np.ndarray | None = None,
         joint_names: list[str] | None = None,
         title: str | None = None,
+        constraints: list | None = None,
+        E_max: float | None = None,
         show: bool = True,
     ) -> list:
         """Produce four diagnostic figures for the recorded run.
@@ -200,6 +243,10 @@ class CERGHistory:
         tau_limit         : torque limit magnitude (nv,) — symmetric ±tau_limit
         joint_names       : display names for each joint (length nv)
         title             : prefix prepended to each figure's suptitle
+        constraints       : list of Constraint objects — boundaries are drawn as
+                            dashed lines on the end-effector position figure
+        E_max             : energy limit (e.g. config.E_max) — drawn as a
+                            horizontal dashed line on the energy panel
         show              : call ``plt.show()`` after creating all figures
         """
         try:
@@ -237,9 +284,17 @@ class CERGHistory:
             ),
             _fig_dsm_energy(
                 t, self.dsm, self.energy, self.soft_contact_times,
-                _mk_title("DSM & Energy"),
+                E_max, _mk_title("DSM & Energy"),
             ),
         ]
+
+        ee_names = self.ee_names()
+        if ee_names:
+            ee_data = {name: self.ee_positions(name) for name in ee_names}
+            figs.append(_fig_end_effector_positions(
+                t, ee_data, constraints or [],
+                _mk_title("End-Effector Positions"),
+            ))
 
         if show:
             plt.show()
@@ -396,7 +451,62 @@ def _fig_joint_scalar(t, data, lo_arr, hi_arr, names, suptitle, ylabel):
     return fig
 
 
-def _fig_dsm_energy(t, dsm, energy, contact_times, suptitle):
+def _fig_end_effector_positions(t, ee_data, constraints, suptitle):
+    """Figure: world-frame x/y/z positions of each end-effector over time.
+
+    One row per end-effector, three columns for x / y / z.
+    Axis-aligned half-space constraints are drawn as dashed lines on the
+    matching axis column (solid = hard, dashed = soft).
+    """
+    import matplotlib.pyplot as plt
+
+    ee_names = list(ee_data.keys())
+    n_ee = len(ee_names)
+    axis_labels = ["x (m)", "y (m)", "z (m)"]
+    axis_colors = ["#1976D2", "#388E3C", "#F57C00"]
+
+    # Map each axis-aligned constraint to (col_idx, offset, kind)
+    constraint_lines: list[tuple[int, float, str]] = []
+    for c in constraints:
+        if not (hasattr(c, "normal") and hasattr(c, "offset")):
+            continue
+        n = np.asarray(c.normal, dtype=float)
+        col = int(np.argmax(np.abs(n)))
+        if abs(n[col]) > 0.99:
+            constraint_lines.append((col, float(c.offset), getattr(c, "kind", "")))
+
+    fig, axes = plt.subplots(
+        n_ee, 3,
+        figsize=(12, 3.2 * n_ee),
+        squeeze=False,
+    )
+    fig.suptitle(suptitle, fontsize=11, fontweight="bold")
+
+    for row, name in enumerate(ee_names):
+        pos = ee_data[name]  # (3, N)
+        for col in range(3):
+            ax = axes[row][col]
+            ax.plot(t, pos[col], color=axis_colors[col], lw=1.5)
+            ax.set_title(f"{name}  {axis_labels[col]}", fontsize=9, pad=3)
+            ax.set_xlabel("t (s)", fontsize=8)
+            ax.set_ylabel(axis_labels[col], fontsize=8)
+            ax.grid(True, alpha=0.22, linestyle=":")
+            ax.tick_params(labelsize=7)
+
+            for (cidx, offset, kind) in constraint_lines:
+                if cidx == col:
+                    ls = "--" if kind == "soft" else "-"
+                    ax.axhline(
+                        offset, color="#d32f2f", lw=1.2, ls=ls, alpha=0.9,
+                        label=f"{kind} boundary ({axis_labels[col].split()[0]}={offset})",
+                    )
+                    ax.legend(fontsize=7, loc="best", framealpha=0.75)
+
+    fig.tight_layout()
+    return fig
+
+
+def _fig_dsm_energy(t, dsm, energy, contact_times, E_max, suptitle):
     """Figure 4: DSM area chart + optional energy area chart with contact markers."""
     import matplotlib.pyplot as plt
 
@@ -429,11 +539,16 @@ def _fig_dsm_energy(t, dsm, energy, contact_times, suptitle):
         ax_e.fill_between(t, energy, 0, alpha=0.20, color="#388E3C")
         ax_e.plot(t, energy, color="#388E3C", lw=1.6, label="Energy")
 
+        # E_max limit line
+        if E_max is not None:
+            ax_e.axhline(E_max, color="#d32f2f", lw=1.2, ls="--", alpha=0.9,
+                         label=f"E_max = {E_max}")
+
         # Vertical lines at first contact and all subsequent contacts
         _legend_contact_added = False
         for tc in contact_times:
             label = "soft contact" if not _legend_contact_added else None
-            ax_e.axvline(tc, color="#d32f2f", lw=1.0, ls="--", alpha=0.75, label=label)
+            ax_e.axvline(tc, color="#F57C00", lw=1.0, ls="--", alpha=0.75, label=label)
             _legend_contact_added = True
 
         ax_e.set_ylabel("Energy (J)", fontsize=9)
