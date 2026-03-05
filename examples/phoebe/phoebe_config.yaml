@@ -1,0 +1,38 @@
+# CERG configuration for the Phoebe UR5e arms (6 DOF each)
+# Applied identically to left and right arm instances.
+
+# ─── Controller gains ───
+# Order: shoulder_pan, shoulder_lift, elbow, wrist_1, wrist_2, wrist_3
+Kp: [200.0, 200.0, 150.0, 50.0, 50.0, 50.0]
+Kd: [20.0,  20.0,  15.0,  5.0,  5.0,  5.0]
+
+
+# ─── CERG prediction ───
+prediction_dt: 0.01
+prediction_horizon: 0.2
+erg_dt: 0.01
+
+# ─── Navigation field ───
+eta: 0.005
+zeta_q: 0.15
+delta_q: 0.1
+delta_s: 0.1
+fd: 1.0
+zeta_w: 0.15
+delta_w: 0.1
+
+# ─── DSM robustness margins ───
+robust_delta_tau: 0.0
+robust_delta_q: 0.0
+robust_delta_dq: 0.0
+
+# ─── DSM scaling factors ───
+kappa_tau: 1.0
+kappa_q: 1.0
+kappa_dq: 1.0
+kappa_soft: 1.0
+kappa_hard: 1.0
+kappa_energy: 1.0
+
+# ─── Energy constraint ───
+E_max: 5.0
