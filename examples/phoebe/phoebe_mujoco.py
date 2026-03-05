@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from pathlib import Path
 
 _PHOEBE_XML  = Path(__file__).resolve().parent / "models" / "phoebe.xml"
@@ -25,14 +27,22 @@ def build_viz_model():
     if not _PHOEBE_XML.exists():
         raise FileNotFoundError(f"Phoebe model not found: {_PHOEBE_XML}")
 
-    # Patch relative meshdir → absolute so assets resolve correctly
+    # Patch relative meshdir → absolute, then write to a temp file in the
+    # same directory as phoebe.xml so that <include> tags (e.g. wheels.xml)
+    # still resolve correctly via from_xml_path.
     xml_text = _PHOEBE_XML.read_text()
     xml_text = re.sub(
         r'meshdir="([^"]*)"',
         f'meshdir="{_ASSETS_DIR}/"',
         xml_text,
     )
-    m = mujoco.MjModel.from_xml_string(xml_text)
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".xml", dir=str(_PHOEBE_XML.parent))
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            f.write(xml_text)
+        m = mujoco.MjModel.from_xml_path(tmp_path)
+    finally:
+        os.unlink(tmp_path)
     d = mujoco.MjData(m)
 
     def _qadr(name: str) -> int:
