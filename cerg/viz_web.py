@@ -222,6 +222,7 @@ def plot_pd(
     qd: np.ndarray,
     tau: np.ndarray,
     *,
+    q_target: np.ndarray | None = None,
     q_lower: np.ndarray | None = None,
     q_upper: np.ndarray | None = None,
     qd_limit: np.ndarray | None = None,
@@ -229,7 +230,11 @@ def plot_pd(
     joint_names: list[str] | None = None,
     title: str = "PD",
 ) -> dict[str, "go.Figure"]:
-    """Plotly figures for a pure-PD run. Returns dict suitable for serve_plots."""
+    """Plotly figures for a pure-PD run. Returns dict suitable for serve_plots.
+
+    q_target: shape (nv,) constant desired joint positions — shown as a
+              dashed line on the positions plot.
+    """
     import plotly.graph_objects as go
 
     nv = q.shape[1]
@@ -242,9 +247,15 @@ def plot_pd(
     for i in range(nv):
         r, c = divmod(i, n_cols)
         fig_q.add_trace(
-            go.Scatter(x=t, y=q[:, i], name=names[i], line=dict(color=cols[i])),
+            go.Scatter(x=t, y=q[:, i], name="q", line=dict(color=cols[i])),
             row=r + 1, col=c + 1,
         )
+        if q_target is not None:
+            fig_q.add_trace(
+                go.Scatter(x=t, y=np.full(len(t), q_target[i]),
+                           name="q_r", line=dict(color="#888", dash="dot", width=1)),
+                row=r + 1, col=c + 1,
+            )
         lo = float(q_lower[i]) if q_lower is not None else None
         hi = float(q_upper[i]) if q_upper is not None else None
         _add_limits(fig_q, lo, hi, r + 1, c + 1)

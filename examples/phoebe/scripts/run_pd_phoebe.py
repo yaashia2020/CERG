@@ -27,45 +27,16 @@ from cerg.controllers.pd import PDController
 from cerg.core.config import CERGConfig
 from cerg.simulators.mujoco_sim import MuJoCoSimulator
 from cerg.viz_web import MJPEGStream, plot_pd, serve_plots
+from examples.phoebe.phoebe_mujoco import build_viz_model
 from examples.phoebe.phoebe_robot import PhoebeLeftArmRobot, PhoebeRightArmRobot
 
 DT      = 1e-3
 N_STEPS = 15_000
 
-_HERE        = Path(__file__).resolve().parent
-_PHOEBE_XML  = _HERE.parent / "models" / "phoebe.xml"
-_LIFT_HEIGHT = 0.24
-
+_HERE          = Path(__file__).resolve().parent
 Q_TARGET_LEFT  = np.array([0.0, -1.0,  1.5, -0.5, 0.0, 0.0])
 Q_TARGET_RIGHT = np.array([0.0, -1.0,  1.5, -0.5, 0.0, 0.0])
 _JOINT_NAMES   = ["pan", "lift", "elbow", "w1", "w2", "w3"]
-
-
-def _build_viz_model():
-    import mujoco
-    if not _PHOEBE_XML.exists():
-        raise FileNotFoundError(f"Phoebe model not found: {_PHOEBE_XML}")
-    m = mujoco.MjModel.from_xml_path(str(_PHOEBE_XML))
-    d = mujoco.MjData(m)
-
-    def _qadr(name):
-        jid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, name)
-        if jid < 0:
-            raise ValueError(f"Joint not found: {name}")
-        return m.jnt_qposadr[jid]
-
-    arm_joints = {
-        "left":  [_qadr(f"left_ur_arm_{s}")  for s in ("shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint", "wrist_1_joint", "wrist_2_joint", "wrist_3_joint")],
-        "right": [_qadr(f"right_ur_arm_{s}") for s in ("shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint", "wrist_1_joint", "wrist_2_joint", "wrist_3_joint")],
-        "left_lift":  _qadr("left_ewellix_lift_lower_to_higher"),
-        "right_lift": _qadr("right_ewellix_lift_lower_to_higher"),
-    }
-    fj = _qadr("floating_base_joint")
-    d.qpos[fj:fj + 3]     = [0, 0, 0]
-    d.qpos[fj + 3:fj + 7] = [1, 0, 0, 0]
-    d.qpos[arm_joints["left_lift"]]  = _LIFT_HEIGHT
-    d.qpos[arm_joints["right_lift"]] = _LIFT_HEIGHT
-    return m, d, arm_joints
 
 
 def main() -> None:
@@ -95,7 +66,7 @@ def main() -> None:
     stream, viz_data, arm_joints = None, None, None
     if not args.no_viewer:
         try:
-            viz_model, viz_data, arm_joints = _build_viz_model()
+            viz_model, viz_data, arm_joints = build_viz_model()
             stream = MJPEGStream(viz_model, port=args.viewer_port)
             stream.start()
         except Exception as e:
@@ -150,9 +121,9 @@ def main() -> None:
             joint_names=_JOINT_NAMES,
         )
         figs_l = plot_pd(t_arr, np.array(ql), np.array(qdl), np.array(taul),
-                         title="Left arm",  **plot_kwargs)
+                         title="Left arm",  q_target=Q_TARGET_LEFT,  **plot_kwargs)
         figs_r = plot_pd(t_arr, np.array(qr), np.array(qdr), np.array(taur),
-                         title="Right arm", **plot_kwargs)
+                         title="Right arm", q_target=Q_TARGET_RIGHT, **plot_kwargs)
         all_figs = {f"Left — {k}": v for k, v in figs_l.items()}
         all_figs.update({f"Right — {k}": v for k, v in figs_r.items()})
         serve_plots(all_figs, port=args.plot_port)
