@@ -4,7 +4,7 @@ Two independent CERG + PD controllers — one per arm — running in a single
 MuJoCo passive viewer that shows the full robot simultaneously.
 
 Usage (from repo root):
-    python examples/phoebe/run_pd_phoebe.py [--save] [--no-viewer]
+    python examples/phoebe/scripts/run_pd_phoebe.py [--save] [--no-viewer]
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import mujoco.viewer
 import numpy as np
 
 # ── Make the repo importable without installing ──────────────────────────────
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from cerg.controllers.pd import PDController
 from cerg.core.cerg.auxiliary_reference import CERG
@@ -33,7 +33,7 @@ DT = 1e-3
 N_STEPS = 15_000   # 15 s of sim time
 
 _HERE = Path(__file__).resolve().parent
-_PHOEBE_XML = _HERE / "phoebe.xml"
+_PHOEBE_XML = _HERE.parent / "models" / "phoebe.xml"
 # Lift columns fixed at the ROS 2 initial value
 _LIFT_HEIGHT = 0.24
 
@@ -116,7 +116,7 @@ def main() -> None:
     left_sim  = MuJoCoSimulator(left_robot,  dt=DT)
     right_sim = MuJoCoSimulator(right_robot, dt=DT)
 
-    cfg = CERGConfig.from_yaml(str(_HERE / "phoebe_config.yaml"))
+    cfg = CERGConfig.from_yaml(str(_HERE.parent / "configs" / "phoebe_config.yaml"))
 
     # ── PD controllers ────────────────────────────────────────────────────────
     left_ctrl  = PDController.from_config(cfg, left_sim)

@@ -15,14 +15,14 @@ Regenerate the XML files with:
     python examples/build_arm_xml.py \\
         --source /path/to/phoebe.xml \\
         --body left_ur_arm_shoulder_link \\
-        --output examples/phoebe/phoebe_left_arm.xml \\
+        --output examples/phoebe/models/phoebe_left_arm.xml \\
         --mount-pos "0 0.201 0.85" \\
         --exclude-bodies left_finger_1_link left_finger_2_link
 
     python examples/build_arm_xml.py \\
         --source /path/to/phoebe.xml \\
         --body right_ur_arm_shoulder_link \\
-        --output examples/phoebe/phoebe_right_arm.xml \\
+        --output examples/phoebe/models/phoebe_right_arm.xml \\
         --mount-pos "0 -0.201 0.85" \\
         --exclude-bodies right_finger_1_link right_finger_2_link
 """
@@ -104,7 +104,7 @@ class _PhoebeArmRobot(RobotModel):
         return None
 
     def mjcf_path(self) -> Path | None:
-        p = _HERE / f"phoebe_{self._side}_arm.xml"
+        p = _HERE / "models" / f"phoebe_{self._side}_arm.xml"
         return p if p.exists() else None
 
 
