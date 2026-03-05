@@ -106,7 +106,7 @@ def predict_trajectory(
 
         tau = Kp * (q_v[:nv] - q[:nv]) - Kd * qd[:nv] + g[:nv]
 
-        qdd = np.linalg.pinv(M) @ (tau - c - g)
+        qdd = np.linalg.solve(M, tau - c - g)
   
         qd = qd + qdd * pred_dt
         q = q + qd * pred_dt
@@ -274,7 +274,7 @@ def compute_dsm(
     dsm_hard is standalone.
     """
     nv = robot.nv
-    qd_limits = np.broadcast_to(np.asarray(config.qd_limits, dtype=float), (nv,))
+    qd_limits = robot.qd_max
 
     pred = predict_trajectory(
         q0=q, qd0=qd, q_v=q_v,
@@ -292,5 +292,6 @@ def compute_dsm(
     d_soft_energy = max(d_soft, d_energy)
 
     # Final DSM: min across all, lower bounded by 0
-    dsm = min(d_tau, d_q, d_dq, d_soft_energy, d_hard)
-    return max(dsm, 0.0)
+    dsm = min(d_tau, d_q, d_dq, d_energy, d_hard)
+    return max(0.45*dsm, 0.0)
+

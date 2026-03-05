@@ -148,7 +148,8 @@ class CERG:
             config=cfg,
         )
         self._last_dsm = dsm
-
+        # if np.all(dsm * rho * cfg.erg_dt == 0):
+        #     breakpoint()
         # 3. ODE Euler step: dq_v/dt = DSM * rho
         self._q_v = self._q_v + dsm * rho * cfg.erg_dt
 

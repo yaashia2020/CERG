@@ -27,7 +27,7 @@ Usage
     figs = history.plot(
         q_lower=robot.q_lower,
         q_upper=robot.q_upper,
-        qd_limit=config.qd_limits,
+        qd_limit=robot.qd_max,
         tau_limit=robot.tau_max,
         joint_names=[j.name for j in robot.joints],
         title="RRR — soft wall test",

@@ -6,9 +6,6 @@
 Kp: [10.0, 10.0, 20.0]
 Kd: [2.0, 2.0, 2.0]
 
-# ─── Joint velocity limits (symmetric: [-qd_max, qd_max]) ───
-qd_limits: [5.0, 5.0, 5.0]
-
 # ─── CERG prediction ───
 prediction_dt: 0.01        # timestep for Euler integration in predictions
 prediction_horizon: 0.2    # how far ahead to predict (seconds)
@@ -37,4 +34,4 @@ kappa_hard: 1.0             # scaling for hard constraint DSM
 kappa_energy: 1.0
 
 # ─── Energy constraint ───
-E_max: 0.50
+E_max: 1.50

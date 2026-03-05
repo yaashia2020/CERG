@@ -322,7 +322,7 @@ class TestPredictTrajectory:
 
 
 class TestCERGClosedLoop:
-    def test_att_field(self, sim, robot, config, controller):
+    def test_att_field(self, sim, robot, config, controller, visualize):
         """Full CERG+PD loop should converge to the goal without constraints."""
         cerg = CERG(sim, robot, config=config)
 
@@ -331,19 +331,38 @@ class TestCERGClosedLoop:
 
         sim.reset(q0=q0)
         cerg.reset(q0.copy())
+        history = CERGHistory() if visualize else None
 
-        with patch("cerg.core.cerg.auxiliary_reference.compute_dsm", return_value=1.0):
-            for _ in range(3000):
-                state = sim.get_state()
-                q_v = cerg.step(state.q, state.qd, q_r)
-                tau = controller.compute(state, q_v)
-                sim.step(tau)
-                sim.publish()
+        # with patch("cerg.core.cerg.auxiliary_reference.compute_dsm", return_value=1.0):
+        for _ in range(3000):
+            state = sim.get_state()
+            q_v = cerg.step(state.q, state.qd, q_r)
+            tau = controller.compute(state, q_v)
+            sim.step(tau)
+            sim.publish()
+            if history is not None:
+                ee_pos = {name: sim.get_body_position(name, q=state.q)
+                          for name in robot.end_effectors}
+                history.record(
+                     t=state.t, q=state.q, qd=state.qd,
+                     q_v=q_v, q_r=q_r, tau=tau, dsm=cerg.last_dsm,
+                        ee_pos=ee_pos,
+                 )
 
         state = sim.get_state()
         assert_allclose(state.q, q_r, atol=0.05)
 
-    def test_respects_joint_limits(self, sim, robot, config, controller):
+        if history is not None:
+            history.plot(
+                q_lower=robot.q_lower, q_upper=robot.q_upper,
+                qd_limit=config.qd_limits, tau_limit=robot.tau_max,
+                joint_names=[j.name for j in robot.joints],
+                E_max=config.E_max,
+                title="RRR — attraction field test (DSM=1)",
+            )
+            input("\nGraphs open — press Enter to close and finish test...")
+
+    def test_respects_joint_limits(self, sim, robot, config, controller, visualize):
         """CERG should prevent q_v from pushing joints past limits."""
         cerg = CERG(sim, robot, config=config)
 
@@ -352,6 +371,7 @@ class TestCERGClosedLoop:
 
         sim.reset(q0=q0)
         cerg.reset(q0.copy())
+        history = CERGHistory() if visualize else None
 
         for _ in range(2000):
             state = sim.get_state()
@@ -359,6 +379,14 @@ class TestCERGClosedLoop:
             tau = controller.compute(state, q_v)
             sim.step(tau)
             sim.publish()
+            if history is not None:
+                ee_pos = {name: sim.get_body_position(name, q=state.q)
+                          for name in robot.end_effectors}
+                history.record(
+                    t=state.t, q=state.q, qd=state.qd,
+                    q_v=q_v, q_r=q_r, tau=tau, dsm=cerg.last_dsm,
+                    ee_pos=ee_pos,
+                )
 
         state = sim.get_state()
         for i in range(robot.nv):
@@ -368,6 +396,16 @@ class TestCERGClosedLoop:
             assert state.q[i] <= robot.q_upper[i] + 0.1, (
                 f"Joint {i} above upper limit: {state.q[i]} > {robot.q_upper[i]}"
             )
+
+        if history is not None:
+            history.plot(
+                q_lower=robot.q_lower, q_upper=robot.q_upper,
+                qd_limit=config.qd_limits, tau_limit=robot.tau_max,
+                joint_names=[j.name for j in robot.joints],
+                E_max=config.E_max,
+                title="RRR — joint limits test",
+            )
+            input("\nGraphs open — press Enter to close and finish test...")
 
     def test_with_hard_constraint(self, sim, robot, config, controller, visualize):
         """CERG should keep the arm behind a hard wall constraint.
@@ -498,6 +536,7 @@ class TestCERGClosedLoop:
 
             # Record constraint violations and end-effector positions
             body_pos = sim.get_all_body_positions(robot.body_names, q=state.q)
+
             for i, name in enumerate(robot.body_names):
                 d = wall.signed_distance(body_pos[:, i])
                 if d < 0:
@@ -526,15 +565,23 @@ class TestCERGClosedLoop:
                 E_max=config.E_max,
                 title="RRR — soft wall test",
             )
+            input("\nGraphs open — press Enter to close and finish test...")
 
         # Soft-constraint invariant: any boundary crossing must have E < E_max
-        for body_name, d, energy in violations:
-            assert energy < config.E_max, (
-                f"Body '{body_name}' violated constraint (d={d:.4f}) "
-                f"but energy {energy:.4f} >= E_max={config.E_max:.4f}"
+        bad = [(name, d, e) for name, d, e in violations if e >= config.E_max]
+        if bad:
+            header = f"{'body':<30}  {'dist':>10}  {'energy':>10}  {'E_max':>10}"
+            rows = "\n".join(
+                f"{name:<30}  {d:>10.4f}  {e:>10.4f}  {config.E_max:>10.4f}"
+                for name, d, e in bad
+            )
+            pytest.fail(
+                f"\n{len(bad)} boundary crossings with energy >= E_max "
+                f"(out of {len(violations)} total crossings):\n\n"
+                f"{header}\n{rows}"
             )
 
-    def test_qv_never_jumps(self, sim, robot, config, controller):
+    def test_qv_never_jumps(self, sim, robot, config, controller, visualize):
         """q_v should evolve smoothly — no discontinuous jumps."""
         cerg = CERG(sim, robot, config=config)
 
@@ -543,6 +590,7 @@ class TestCERGClosedLoop:
 
         sim.reset(q0=q0)
         cerg.reset(q0.copy())
+        history = CERGHistory() if visualize else None
 
         q_v_prev = q0.copy()
         max_jump = 0.0
@@ -555,10 +603,28 @@ class TestCERGClosedLoop:
             tau = controller.compute(state, q_v)
             sim.step(tau)
             sim.publish()
+            if history is not None:
+                ee_pos = {name: sim.get_body_position(name, q=state.q)
+                          for name in robot.end_effectors}
+                history.record(
+                    t=state.t, q=state.q, qd=state.qd,
+                    q_v=q_v, q_r=q_r, tau=tau, dsm=cerg.last_dsm,
+                    ee_pos=ee_pos,
+                )
 
         assert max_jump < 0.1, f"q_v jumped {max_jump:.4f} in one step"
 
-    def test_dsm_modulates_speed(self, sim, robot, config, controller):
+        if history is not None:
+            history.plot(
+                q_lower=robot.q_lower, q_upper=robot.q_upper,
+                qd_limit=config.qd_limits, tau_limit=robot.tau_max,
+                joint_names=[j.name for j in robot.joints],
+                E_max=config.E_max,
+                title="RRR — q_v smoothness test",
+            )
+            input("\nGraphs open — press Enter to close and finish test...")
+
+    def test_dsm_modulates_speed(self, sim, robot, config, controller, visualize):
         """DSM should start positive and stay non-negative throughout."""
         cerg = CERG(sim, robot, config=config)
 
@@ -567,15 +633,34 @@ class TestCERGClosedLoop:
 
         sim.reset(q0=q0)
         cerg.reset(q0.copy())
+        history = CERGHistory() if visualize else None
 
         dsm_values = []
         for _ in range(500):
             state = sim.get_state()
-            cerg.step(state.q, state.qd, q_r)
+            q_v = cerg.step(state.q, state.qd, q_r)
             dsm_values.append(cerg.last_dsm)
-            tau = controller.compute(state, cerg.q_v)
+            tau = controller.compute(state, q_v)
             sim.step(tau)
             sim.publish()
+            if history is not None:
+                ee_pos = {name: sim.get_body_position(name, q=state.q)
+                          for name in robot.end_effectors}
+                history.record(
+                    t=state.t, q=state.q, qd=state.qd,
+                    q_v=q_v, q_r=q_r, tau=tau, dsm=cerg.last_dsm,
+                    ee_pos=ee_pos,
+                )
 
         assert all(d >= 0.0 for d in dsm_values), "DSM went negative"
         assert dsm_values[0] > 0.0, "Initial DSM should be positive"
+
+        if history is not None:
+            history.plot(
+                q_lower=robot.q_lower, q_upper=robot.q_upper,
+                qd_limit=config.qd_limits, tau_limit=robot.tau_max,
+                joint_names=[j.name for j in robot.joints],
+                E_max=config.E_max,
+                title="RRR — DSM modulation test",
+            )
+            input("\nGraphs open — press Enter to close and finish test...")

@@ -34,9 +34,9 @@ class RRRRobot(RobotModel):
     @property
     def joints(self) -> list[JointInfo]:
         return [
-            JointInfo(name="joint1", lower=-3.14159, upper=3.14159, max_torque=50.0, damping=0.1),
-            JointInfo(name="joint2", lower=-3.14159, upper=3.14159, max_torque=30.0, damping=0.1),
-            JointInfo(name="joint3", lower=-3.14159, upper=3.14159, max_torque=20.0, damping=0.1),
+            JointInfo(name="joint1", lower=-3.14159, upper=3.14159, max_torque=50.0, max_velocity=5.0, damping=0.1),
+            JointInfo(name="joint2", lower=-3.14159, upper=3.14159, max_torque=30.0, max_velocity=5.0, damping=0.1),
+            JointInfo(name="joint3", lower=-3.14159, upper=3.14159, max_torque=20.0, max_velocity=5.0, damping=0.1),
         ]
 
     @property

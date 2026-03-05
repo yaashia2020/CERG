@@ -157,5 +157,10 @@ def compute_navigation_field(
     rho_rep = joint_limit_repulsion(q_v, robot, config)
     rho_soft = _constraint_repulsion(q_v, simulator, robot, soft_constraints, soft_scale, config)
     rho_hard = _constraint_repulsion(q_v, simulator, robot, hard_constraints, hard_scale, config)
-
+    if np.all(rho_att + rho_rep + rho_soft + rho_hard == 0):
+        print("rho_att:", rho_att)
+        print("rho_rep:", rho_rep)
+        print("rho_soft:", rho_soft)
+        print("rho_hard:", rho_hard)
+        breakpoint()
     return rho_att + rho_rep + rho_soft + rho_hard

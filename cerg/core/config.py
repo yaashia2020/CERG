@@ -25,7 +25,7 @@ class CERGConfig:
     """
 
     # Required fields and their expected types
-    _ARRAY_FIELDS = {"Kp", "Kd", "qd_limits"}
+    _ARRAY_FIELDS = {"Kp", "Kd"}
     _FLOAT_FIELDS = {
         "prediction_dt", "prediction_horizon", "erg_dt",
         "eta", "zeta_q", "delta_q", "delta_s", "fd", "zeta_w", "delta_w",

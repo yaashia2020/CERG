@@ -17,6 +17,7 @@ class JointInfo:
     lower: float
     upper: float
     max_torque: float
+    max_velocity: float
     damping: float = 0.0
 
 
@@ -98,6 +99,10 @@ class RobotModel(ABC):
     @property
     def tau_max(self) -> np.ndarray:
         return np.array([j.max_torque for j in self.joints])
+
+    @property
+    def qd_max(self) -> np.ndarray:
+        return np.array([j.max_velocity for j in self.joints])
 
     def random_configuration(self, rng: np.random.Generator | None = None) -> np.ndarray:
         """Sample a uniformly random configuration within joint limits."""
