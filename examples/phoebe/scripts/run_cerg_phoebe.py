@@ -1,7 +1,7 @@
-"""Pure PD joint-space controller for Phoebe dual UR5e arms (MuJoCo).
+"""CERG + PD controller for Phoebe dual UR5e arms (MuJoCo).
 
 Usage (from repo root):
-    python examples/phoebe/scripts/run_pd_phoebe.py [--no-viewer] [--no-plots]
+    python examples/phoebe/scripts/run_cerg_phoebe.py [--no-viewer] [--no-plots]
 
 SSH tunnel (before opening browser):
     ssh -L 7000:localhost:7000 -L 7001:localhost:7001 <user>@<host>
@@ -24,9 +24,11 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from cerg.controllers.pd import PDController
+from cerg.core.cerg.auxiliary_reference import CERG
 from cerg.core.config import CERGConfig
 from cerg.simulators.mujoco_sim import MuJoCoSimulator
-from cerg.viz_web import MJPEGStream, plot_pd, serve_plots
+from cerg.viz import CERGHistory
+from cerg.viz_web import MJPEGStream, plot_cerg, serve_plots
 from examples.phoebe.phoebe_robot import PhoebeLeftArmRobot, PhoebeRightArmRobot
 
 DT      = 1e-3
@@ -69,7 +71,7 @@ def _build_viz_model():
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Phoebe PD arm control")
+    parser = argparse.ArgumentParser(description="Phoebe CERG+PD arm control")
     parser.add_argument("--no-viewer",   action="store_true")
     parser.add_argument("--no-plots",    action="store_true")
     parser.add_argument("--viewer-port", type=int, default=7000)
@@ -84,13 +86,15 @@ def main() -> None:
     cfg        = CERGConfig.from_yaml(str(_HERE.parent / "configs" / "phoebe_config.yaml"))
     left_ctrl  = PDController.from_config(cfg, left_sim)
     right_ctrl = PDController.from_config(cfg, right_sim)
+    left_cerg  = CERG(left_sim,  left_robot,  constraints=[], config=cfg)
+    right_cerg = CERG(right_sim, right_robot, constraints=[], config=cfg)
 
-    left_sim.reset(q0=np.zeros(6))
-    right_sim.reset(q0=np.zeros(6))
+    q0 = np.zeros(6)
+    left_sim.reset(q0=q0);   right_sim.reset(q0=q0)
+    left_cerg.reset(q0);     right_cerg.reset(q0)
 
-    t_hist: list[float] = []
-    ql, qdl, taul = [], [], []
-    qr, qdr, taur = [], [], []
+    left_history  = CERGHistory()
+    right_history = CERGHistory()
 
     stream, viz_data, arm_joints = None, None, None
     if not args.no_viewer:
@@ -104,16 +108,25 @@ def main() -> None:
     t_wall_start = time.time()
     for k in range(N_STEPS):
         l_state = left_sim.get_state()
-        l_tau   = left_ctrl.compute(l_state, Q_TARGET_LEFT)
+        l_qv    = left_cerg.step(l_state.q, l_state.qd, Q_TARGET_LEFT)
+        l_tau   = left_ctrl.compute(l_state, l_qv)
         left_sim.step(l_tau)
 
         r_state = right_sim.get_state()
-        r_tau   = right_ctrl.compute(r_state, Q_TARGET_RIGHT)
+        r_qv    = right_cerg.step(r_state.q, r_state.qd, Q_TARGET_RIGHT)
+        r_tau   = right_ctrl.compute(r_state, r_qv)
         right_sim.step(r_tau)
 
-        t_hist.append(l_state.t)
-        ql.append(l_state.q);  qdl.append(l_state.qd);  taul.append(l_tau)
-        qr.append(r_state.q);  qdr.append(r_state.qd);  taur.append(r_tau)
+        left_history.record(
+            t=l_state.t, q=l_state.q, qd=l_state.qd,
+            q_v=l_qv, q_r=Q_TARGET_LEFT, tau=l_tau,
+            dsm=left_cerg.last_dsm,
+        )
+        right_history.record(
+            t=r_state.t, q=r_state.q, qd=r_state.qd,
+            q_v=r_qv, q_r=Q_TARGET_RIGHT, tau=r_tau,
+            dsm=right_cerg.last_dsm,
+        )
 
         if stream is not None:
             for i, adr in enumerate(arm_joints["left"]):
@@ -141,18 +154,16 @@ def main() -> None:
     print(f"  error    : {np.abs(Q_TARGET_RIGHT - r_final.q)}")
 
     if not args.no_plots:
-        t_arr = np.array(t_hist)
         plot_kwargs = dict(
             q_lower=left_robot.q_lower,
             q_upper=left_robot.q_upper,
             qd_limit=left_robot.qd_max,
             tau_limit=left_robot.tau_max,
             joint_names=_JOINT_NAMES,
+            E_max=cfg.E_max,
         )
-        figs_l = plot_pd(t_arr, np.array(ql), np.array(qdl), np.array(taul),
-                         title="Left arm",  **plot_kwargs)
-        figs_r = plot_pd(t_arr, np.array(qr), np.array(qdr), np.array(taur),
-                         title="Right arm", **plot_kwargs)
+        figs_l = plot_cerg(left_history,  title="Left arm",  **plot_kwargs)
+        figs_r = plot_cerg(right_history, title="Right arm", **plot_kwargs)
         all_figs = {f"Left — {k}": v for k, v in figs_l.items()}
         all_figs.update({f"Right — {k}": v for k, v in figs_r.items()})
         serve_plots(all_figs, port=args.plot_port)
