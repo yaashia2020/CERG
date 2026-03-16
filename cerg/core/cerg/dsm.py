@@ -106,7 +106,8 @@ def predict_trajectory(
 
         tau = Kp * (q_v[:nv] - q[:nv]) - Kd * qd[:nv] + g[:nv]
 
-        qdd = np.linalg.solve(M, tau - c - g)
+        rhs = tau - c - g
+        qdd = np.linalg.solve(M, rhs)
   
         qd = qd + qdd * pred_dt
         q = q + qd * pred_dt
@@ -293,5 +294,5 @@ def compute_dsm(
 
     # Final DSM: min across all, lower bounded by 0
     dsm = min(d_tau, d_q, d_dq, d_energy, d_hard)
-    return max(0.45*dsm, 0.0)
+    return max(0.3* dsm, 0.0)
 

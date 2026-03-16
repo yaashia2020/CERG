@@ -162,5 +162,5 @@ def compute_navigation_field(
         print("rho_rep:", rho_rep)
         print("rho_soft:", rho_soft)
         print("rho_hard:", rho_hard)
-        breakpoint()
+        # breakpoint()
     return rho_att + rho_rep + rho_soft + rho_hard

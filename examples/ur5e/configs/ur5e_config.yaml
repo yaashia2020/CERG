@@ -1,16 +1,15 @@
-# CERG configuration for the Phoebe UR5e arms (6 DOF each)
-# Applied identically to left and right arm instances.
+# CERG config for standalone UR5e (no gripper/tool)
+# Used for prediction trajectory debugging.
 
 # ─── Controller gains ───
 # Order: shoulder_pan, shoulder_lift, elbow, wrist_1, wrist_2, wrist_3
 Kp: [100.0, 100.0, 75.0, 25.0, 25.0, 25.0]
-Kd: [30.0,  30.0,  22.5,   7.5,   7.5,   7.5]
-
+Kd: [10.0,  10.0,  7.5,  2.5,  2.5,  2.5]
 
 # ─── CERG prediction ───
-prediction_dt: 0.05
+prediction_dt: 0.001
 prediction_horizon: 0.2
-erg_dt: 0.01
+erg_dt: 0.001
 
 # ─── Navigation field ───
 eta: 0.005

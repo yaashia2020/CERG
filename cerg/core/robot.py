@@ -104,6 +104,11 @@ class RobotModel(ABC):
     def qd_max(self) -> np.ndarray:
         return np.array([j.max_velocity for j in self.joints])
 
+    @property
+    def armature(self) -> np.ndarray | None:
+        """Reflected actuator inertia per joint (kg·m²). None means use URDF/MJCF value."""
+        return None
+
     def random_configuration(self, rng: np.random.Generator | None = None) -> np.ndarray:
         """Sample a uniformly random configuration within joint limits."""
         rng = rng or np.random.default_rng()

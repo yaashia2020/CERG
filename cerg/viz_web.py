@@ -70,6 +70,8 @@ class MJPEGStream:
         width: int = 640,
         height: int = 480,
     ) -> None:
+        # Force EGL (headless OpenGL) — must be set before mujoco creates a GL context.
+        os.environ.setdefault("MUJOCO_GL", "egl")
         import mujoco as _mj
         self._model = model
         self._renderer = _mj.Renderer(model, height=height, width=width)

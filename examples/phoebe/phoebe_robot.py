@@ -32,6 +32,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import numpy as np
+
 from cerg.core.robot import JointInfo, RobotModel
 
 _HERE = Path(__file__).resolve().parent
@@ -91,6 +93,11 @@ class _PhoebeArmRobot(RobotModel):
             )
             for suffix, lower, upper, max_tau, max_vel, damp in _ARM_JOINTS_TEMPLATE
         ]
+
+    @property
+    def armature(self) -> np.ndarray:
+        # Reflected actuator inertia for UR5e joints
+        return np.array([1.731, 1.531, 1.868, 0.0213, 0.0210, 0.0212])
 
     @property
     def body_names(self) -> list[str]:

@@ -1,22 +1,19 @@
 """CERG + PD controller for Phoebe dual UR5e arms (MuJoCo).
 
 Usage (from repo root):
-    python examples/phoebe/scripts/run_cerg_phoebe.py [--no-viewer] [--no-plots]
+    python examples/phoebe/scripts/run_cerg_phoebe.py [--no-viewer] [--no-plots] [--clear]
 
-SSH tunnel (before opening browser):
-    ssh -L 7000:localhost:7000 -L 7001:localhost:7001 <user>@<host>
-    MuJoCo viewer : http://localhost:7000/
-    Plots         : http://localhost:7001/
-
-Direct access (on purplemochi):
-    http://localhost:7000/  and  http://localhost:7001/
+Plots are saved as PNGs in examples/phoebe/plots/ and displayed interactively.
+Use --clear to wipe the plots folder before saving.
 """
 
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -28,26 +25,31 @@ from cerg.core.cerg.auxiliary_reference import CERG
 from cerg.core.config import CERGConfig
 from cerg.simulators.mujoco_sim import MuJoCoSimulator
 from cerg.viz import CERGHistory
-from cerg.viz_web import MJPEGStream, plot_cerg, serve_plots
 from examples.phoebe.phoebe_mujoco import build_viz_model
 from examples.phoebe.phoebe_robot import PhoebeLeftArmRobot, PhoebeRightArmRobot
 
 DT      = 1e-3
-N_STEPS = 15_000
+N_STEPS = 90000  # 60s at 1kHz
 
 _HERE          = Path(__file__).resolve().parent
-Q_TARGET_LEFT  = np.array([0.0, -1.0,  1.5, -0.5, 0.0, 0.0])
-Q_TARGET_RIGHT = np.array([0.0, -1.0,  1.5, -0.5, 0.0, 0.0])
+_PLOTS_DIR     = _HERE.parent / "plots"
+Q_TARGET_LEFT  = np.array([8.0, -8.0,  5.0, -8.0, 8.0, 8.0])
+Q_TARGET_RIGHT = np.array([8.0, -8.0,  5.0, -8.0, 8.0, 8.0])
 _JOINT_NAMES   = ["pan", "lift", "elbow", "w1", "w2", "w3"]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Phoebe CERG+PD arm control")
-    parser.add_argument("--no-viewer",   action="store_true")
-    parser.add_argument("--no-plots",    action="store_true")
-    parser.add_argument("--viewer-port", type=int, default=7000)
-    parser.add_argument("--plot-port",   type=int, default=7001)
+    parser.add_argument("--no-viewer", action="store_true")
+    parser.add_argument("--no-plots",  action="store_true")
+    parser.add_argument("--clear",     action="store_true", help="Clear plots folder before saving")
     args = parser.parse_args()
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if _PLOTS_DIR.exists():
+        shutil.rmtree(_PLOTS_DIR)
+        print(f"Cleared {_PLOTS_DIR}")
 
     left_robot  = PhoebeLeftArmRobot()
     right_robot = PhoebeRightArmRobot()
@@ -67,17 +69,24 @@ def main() -> None:
     left_history  = CERGHistory()
     right_history = CERGHistory()
 
-    stream, viz_data, arm_joints = None, None, None
+    # Native MuJoCo viewer (passive GLFW window, non-blocking)
+    viewer, viz_model, viz_data, arm_joints = None, None, None, None
     if not args.no_viewer:
         try:
+            import mujoco as _mj
+            import mujoco.viewer as _mj_viewer
             viz_model, viz_data, arm_joints = build_viz_model()
-            stream = MJPEGStream(viz_model, port=args.viewer_port)
-            stream.start()
+            viewer = _mj_viewer.launch_passive(viz_model, viz_data)
         except Exception as e:
             print(f"[warn] Viewer unavailable: {e}")
 
+    _RENDER_DT   = 1 / 30
+    _last_render = -_RENDER_DT
+
     t_wall_start = time.time()
     for k in range(N_STEPS):
+        if k % 5000 == 0:
+            print(f"  step {k}/{N_STEPS}  t={k*DT:.1f}s")
         l_state = left_sim.get_state()
         l_qv    = left_cerg.step(l_state.q, l_state.qd, Q_TARGET_LEFT)
         l_tau   = left_ctrl.compute(l_state, l_qv)
@@ -99,19 +108,22 @@ def main() -> None:
             dsm=right_cerg.last_dsm,
         )
 
-        if stream is not None:
+        if viewer is not None and viewer.is_running():
             for i, adr in enumerate(arm_joints["left"]):
                 viz_data.qpos[adr] = l_state.q[i]
             for i, adr in enumerate(arm_joints["right"]):
                 viz_data.qpos[adr] = r_state.q[i]
-            stream.update(viz_data)
-            t_sim  = (k + 1) * DT
             t_wall = time.time() - t_wall_start
+            if t_wall - _last_render >= _RENDER_DT:
+                _mj.mj_forward(viz_model, viz_data)
+                viewer.sync()
+                _last_render = t_wall
+            t_sim = (k + 1) * DT
             if t_sim > t_wall:
                 time.sleep(t_sim - t_wall)
 
-    if stream is not None:
-        stream.stop()
+    if viewer is not None:
+        viewer.close()
 
     l_final = left_sim.get_state()
     r_final = right_sim.get_state()
@@ -132,12 +144,25 @@ def main() -> None:
             tau_limit=left_robot.tau_max,
             joint_names=_JOINT_NAMES,
             E_max=cfg.E_max,
+            show=False,
         )
-        figs_l = plot_cerg(left_history,  title="Left arm",  **plot_kwargs)
-        figs_r = plot_cerg(right_history, title="Right arm", **plot_kwargs)
-        all_figs = {f"Left — {k}": v for k, v in figs_l.items()}
-        all_figs.update({f"Right — {k}": v for k, v in figs_r.items()})
-        serve_plots(all_figs, port=args.plot_port)
+        figs_l = left_history.plot(title="Left arm",  **plot_kwargs)
+        figs_r = right_history.plot(title="Right arm", **plot_kwargs)
+
+        _PLOTS_DIR.mkdir(exist_ok=True)
+        labels = ["positions", "velocities", "torques", "dsm_energy"]
+        saved = []
+        for arm, figs in [("left", figs_l), ("right", figs_r)]:
+            for label, fig in zip(labels, figs):
+                path = _PLOTS_DIR / f"cerg_{arm}_{label}_{ts}.png"
+                fig.savefig(path, dpi=120, bbox_inches="tight")
+                saved.append(path)
+        print("\nPlots saved:")
+        for p in saved:
+            print(f"  {p}")
+
+        import matplotlib.pyplot as plt
+        plt.show()
 
 
 if __name__ == "__main__":
