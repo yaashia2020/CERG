@@ -12,11 +12,21 @@ _ASSETS_DIR  = Path(__file__).resolve().parent / "assets"
 _LIFT_HEIGHT = 0.24
 
 
-def build_viz_model():
+def build_viz_model(extra_bodies: list[str] | None = None):
     """Load the full Phoebe XML for rendering.
 
     Patches meshdir to an absolute path so it works regardless of CWD or
     where the XML lives inside the repo.
+
+    Parameters
+    ----------
+    extra_bodies : list of str, optional
+        Raw MJCF ``<body>`` snippets to inject into the worldbody before
+        loading.  Use this to add static visual obstacles, markers, etc.
+        without creating a new function each time.  Example::
+
+            wall_xml = Path("models/wall.xml").read_text()
+            m, d, joints = build_viz_model(extra_bodies=[wall_xml])
 
     Returns (MjModel, MjData, arm_joints) where arm_joints maps
     "left"/"right" → list of qpos addresses, and "left_lift"/"right_lift"
@@ -36,6 +46,10 @@ def build_viz_model():
         f'meshdir="{_ASSETS_DIR}/"',
         xml_text,
     )
+
+    if extra_bodies:
+        inject = "\n".join(extra_bodies)
+        xml_text = xml_text.replace("</worldbody>", inject + "\n  </worldbody>")
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".xml", dir=str(_PHOEBE_XML.parent))
     try:
         with os.fdopen(tmp_fd, "w") as f:

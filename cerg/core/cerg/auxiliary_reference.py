@@ -50,11 +50,13 @@ class CERG:
         robot: RobotModel,
         constraints: list[Constraint] | None = None,
         config: CERGConfig | None = None,
+        dsm_scale: float = 1.0,
     ):
         self._sim = simulator
         self._robot = robot
         self._constraints = constraints or []
         self._config = config or CERGConfig()
+        self._dsm_scale = dsm_scale
 
         # State
         self._q_v: np.ndarray | None = None
@@ -147,9 +149,8 @@ class CERG:
             constraints=self._constraints,
             config=cfg,
         )
+        dsm *= self._dsm_scale
         self._last_dsm = dsm
-        # if np.all(dsm * rho * cfg.erg_dt == 0):
-        #     breakpoint()
         # 3. ODE Euler step: dq_v/dt = DSM * rho
         self._q_v = self._q_v + dsm * rho * cfg.erg_dt
 

@@ -109,20 +109,29 @@ class HalfSpaceConstraint(Constraint):
 # -------------------------------------------------------------------- #
 
 
-def load_constraints(path: str | Path) -> list[Constraint]:
+def load_constraints(path: str | Path) -> dict[str, Constraint]:
     """Load constraints from a YAML environment file.
+
+    Returns a dict keyed by the ``name`` field in the YAML.
+    Use the values as lists when passing to CERG:
+
+        cs = load_constraints("wall_constraints.yaml")
+        left_cerg  = CERG(..., constraints=[cs["left"]])
+        right_cerg = CERG(..., constraints=[cs["right"]])
 
     Expected format:
         constraints:
-          - type: half_space
-            normal: [-1, 0, 0]
-            offset: -0.8
+          - name: left
+            type: half_space
+            normal: [0, -1, 0]
+            offset: -0.02
             kind: soft
 
-          - type: half_space
-            normal: [0, 0, 1]
-            offset: 0.0
-            kind: hard
+          - name: right
+            type: half_space
+            normal: [0, 1, 0]
+            offset: -0.02
+            kind: soft
     """
     try:
         import yaml
@@ -136,13 +145,14 @@ def load_constraints(path: str | Path) -> list[Constraint]:
         "half_space": _build_half_space,
     }
 
-    constraints = []
-    for entry in data.get("constraints", []):
+    constraints: dict[str, Constraint] = {}
+    for i, entry in enumerate(data.get("constraints", [])):
         ctype = entry.get("type", "").lower()
         builder = _BUILDERS.get(ctype)
         if builder is None:
             raise ValueError(f"Unknown constraint type '{ctype}'. Available: {list(_BUILDERS)}")
-        constraints.append(builder(entry))
+        name = entry.get("name", str(i))
+        constraints[name] = builder(entry)
 
     return constraints
 

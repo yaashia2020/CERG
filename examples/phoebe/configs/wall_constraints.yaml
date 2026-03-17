@@ -1,0 +1,21 @@
+# Half-space constraints for the wall obstacle at x=0.7, y=0.
+#
+# The wall separates the two arms along the y-axis (thickness = 30 cm).
+#   left  arm lives at y > 0  → must stay at y > +0.15
+#   right arm lives at y < 0  → must stay at y < -0.15
+#
+# HalfSpaceConstraint convention: signed_distance = offset - n·p
+#   positive = safe,  zero = boundary,  negative = violated
+
+constraints:
+  - name: left
+    type: half_space
+    normal: [0, -1, 0]   # forbidden direction for left arm (toward -y / wall)
+    offset: -0.15        # boundary at y = +0.15
+    kind: soft
+
+  - name: right
+    type: half_space
+    normal: [0, 1, 0]    # forbidden direction for right arm (toward +y / wall)
+    offset: -0.15        # boundary at y = -0.15
+    kind: soft

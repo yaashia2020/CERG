@@ -1,0 +1,11 @@
+<body name="wall_obstacle" pos="0.7 0 1.25">
+  <!-- Solid wall between the two arms with contact enabled.
+       30 cm thick in y, 20 cm wide in x, 2.5 m tall (floor to ceiling). -->
+  <geom type="box"
+        size="0.1 0.15 1.25"
+        rgba="0.8 0.3 0.3 0.6"
+        contype="1" conaffinity="1"
+        solref="0.002 1"
+        solimp="0.99 0.99 0.001"
+        friction="1.0 0.005 0.0001"/>
+</body>
