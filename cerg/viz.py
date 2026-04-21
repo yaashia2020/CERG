@@ -373,8 +373,87 @@ def _hide_unused(axes: np.ndarray, nv: int, n_rows: int, n_cols: int) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────── #
+#  Public plot helper for pure-PD runs                                      #
+# ──────────────────────────────────────────────────────────────────────── #
+
+def plot_pd(
+    t: np.ndarray,
+    q: np.ndarray,    # (N, nv)
+    qd: np.ndarray,   # (N, nv)
+    tau: np.ndarray,  # (N, nv)
+    *,
+    q_target: np.ndarray | None = None,
+    q_lower: np.ndarray | None = None,
+    q_upper: np.ndarray | None = None,
+    qd_limit: np.ndarray | None = None,
+    tau_limit: np.ndarray | None = None,
+    joint_names: list[str] | None = None,
+    title: str = "PD",
+    show: bool = True,
+) -> list:
+    """Three diagnostic figures for a pure-PD run: positions, velocities, torques."""
+    nv    = q.shape[1]
+    names = joint_names or [f"J{i + 1}" for i in range(nv)]
+
+    def _mk(sub: str) -> str:
+        return f"{title} — {sub}"
+
+    q_lo    = _broadcast(q_lower,   nv)
+    q_hi    = _broadcast(q_upper,   nv)
+    qd_lim  = _broadcast(qd_limit,  nv)
+    tau_lim = _broadcast(tau_limit, nv)
+
+    figs = [
+        _fig_positions_pd(t, q.T, q_target, q_lo, q_hi, names, _mk("Joint Positions")),
+        _fig_joint_scalar(t, qd.T,
+                          -qd_lim  if qd_lim  is not None else None, qd_lim,
+                          names, _mk("Joint Velocities"), "rad/s"),
+        _fig_joint_scalar(t, tau.T,
+                          -tau_lim if tau_lim is not None else None, tau_lim,
+                          names, _mk("Joint Torques"), "N·m"),
+    ]
+
+    if show:
+        import matplotlib.pyplot as plt
+        plt.show()
+
+    return figs
+
+
+# ──────────────────────────────────────────────────────────────────────── #
 #  Figure builders                                                          #
 # ──────────────────────────────────────────────────────────────────────── #
+
+def _fig_positions_pd(t, q, q_target, q_lower, q_upper, names, suptitle):
+    """Joint positions for a PD run — q actual + optional constant target line."""
+    import matplotlib.pyplot as plt
+
+    nv = q.shape[0]
+    n_rows, n_cols = _grid_shape(nv)
+    colors = _joint_colors(nv)
+
+    fig, axes = plt.subplots(n_rows, n_cols,
+                             figsize=(4.6 * n_cols, 3.2 * n_rows), squeeze=False)
+    fig.suptitle(suptitle, fontsize=11, fontweight="bold")
+
+    for i in range(nv):
+        r, c = divmod(i, n_cols)
+        ax   = axes[r][c]
+        ax.plot(t, q[i], color=colors[i], lw=1.6, label="q (actual)")
+        if q_target is not None:
+            ax.axhline(q_target[i], color="#555555", lw=1.0, ls="--", label="q_r (target)")
+        lo = q_lower[i] if q_lower is not None else None
+        hi = q_upper[i] if q_upper is not None else None
+        _apply_limits(ax, lo, hi, q[i])
+        _style_ax(ax, names[i], "rad")
+        if i == 0:
+            if lo is not None or hi is not None:
+                ax.plot([], [], color="#d32f2f", lw=0.9, ls="--", label="joint limit")
+            ax.legend(fontsize=7, loc="best", framealpha=0.75)
+
+    _hide_unused(axes, nv, n_rows, n_cols)
+    fig.tight_layout()
+    return fig
 
 def _fig_positions(t, q, q_v, q_r, q_lower, q_upper, names, suptitle):
     """Figure 1: joint positions — q, q_v, q_r with limits."""

@@ -1,0 +1,52 @@
+# CERG configuration – H1_2 left arm (7 DOF)
+# Joint order: shoulder_pitch, shoulder_roll, shoulder_yaw,
+#              elbow, wrist_roll, wrist_pitch, wrist_yaw
+#
+# Arms use lighter actuators (18-40 N·m) for manipulation tasks,
+# so gains are lower than the legs.
+
+# ─── Controller gains ───
+#              sh_pitch  sh_roll  sh_yaw  elbow  wr_roll  wr_pitch  wr_yaw
+Kp: [30.0,     30.0,     15.0,    15.0,   10.0,    10.0,     10.0]
+Kd: [ 8.0,      8.0,      4.0,     4.0,    3.0,     3.0,      3.0]
+
+# ─── Joint position limits [rad] ───
+#                sh_pitch  sh_roll  sh_yaw  elbow  wr_roll  wr_pitch  wr_yaw
+q_min: [        -3.14,    -0.38,   -2.66,  -0.95, -3.01,   -0.4625,  -1.27]
+q_max: [         1.57,     3.40,    3.01,   3.18,  2.75,    0.4625,    1.27]
+
+# ─── Joint velocity limits [rad/s] ───
+dq_max: [9.0, 9.0, 20.0, 20.0, 31.4, 31.4, 31.4]
+
+# ─── Joint torque limits [N·m] ───
+tau_max: [40.0, 40.0, 18.0, 18.0, 19.0, 19.0, 19.0]
+
+# ─── CERG prediction ───
+prediction_dt: 0.02
+prediction_horizon: 0.2
+erg_dt: 0.005
+
+# ─── Navigation field ───
+eta: 0.005
+zeta_q: 0.15
+delta_q: 0.1
+delta_s: 0.1
+fd: 1.0
+zeta_w: 0.15
+delta_w: 0.1
+
+# ─── DSM robustness margins ───
+robust_delta_tau: 0.0
+robust_delta_q: 0.0
+robust_delta_dq: 0.0
+
+# ─── DSM scaling factors ───
+kappa_tau: 1.0
+kappa_q: 1.0
+kappa_dq: 1.0
+kappa_soft: 1.0
+kappa_hard: 1.0
+kappa_energy: 1.0
+
+# ─── Energy constraint ───
+E_max: 5.0

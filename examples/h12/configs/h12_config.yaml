@@ -1,0 +1,56 @@
+# Unitree H1_2 humanoid – master configuration
+# Defines 4 kinematic chains, each controlled by its own CERG instance.
+# The torso joint is shared and not assigned to any single chain.
+
+model_xml: models/h1_2.xml
+
+# ─── Kinematic chains ───
+# Each chain lists its MuJoCo joint names in proximal→distal order.
+# CERG is applied independently per chain; Kp/Kd arrays in the
+# per-chain config must match the joint count listed here.
+
+chains:
+  left_leg:
+    config: configs/left_leg_config.yaml
+    joints:
+      - left_hip_yaw_joint
+      - left_hip_pitch_joint
+      - left_hip_roll_joint
+      - left_knee_joint
+      - left_ankle_pitch_joint
+      - left_ankle_roll_joint
+
+  right_leg:
+    config: configs/right_leg_config.yaml
+    joints:
+      - right_hip_yaw_joint
+      - right_hip_pitch_joint
+      - right_hip_roll_joint
+      - right_knee_joint
+      - right_ankle_pitch_joint
+      - right_ankle_roll_joint
+
+  left_arm:
+    config: configs/left_arm_config.yaml
+    joints:
+      - left_shoulder_pitch_joint
+      - left_shoulder_roll_joint
+      - left_shoulder_yaw_joint
+      - left_elbow_joint
+      - left_wrist_roll_joint
+      - left_wrist_pitch_joint
+      - left_wrist_yaw_joint
+
+  right_arm:
+    config: configs/right_arm_config.yaml
+    joints:
+      - right_shoulder_pitch_joint
+      - right_shoulder_roll_joint
+      - right_shoulder_yaw_joint
+      - right_elbow_joint
+      - right_wrist_roll_joint
+      - right_wrist_pitch_joint
+      - right_wrist_yaw_joint
+
+# ─── Torso (shared / not part of any chain) ───
+torso_joint: torso_joint
