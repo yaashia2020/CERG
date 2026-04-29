@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from cerg.core.cerg.auxiliary_reference import CERG
 from cerg.core.config import CERGConfig
 from cerg.simulators.mujoco_sim import MuJoCoSimulator
-from cerg.viz import plot_pd
+from cerg.viz import CERGHistory
 from examples.h12.cerg_chain import ChainSubRobot, ChainSubSimulator
 from examples.h12.h12_robot import H12HandlessRobot
 
@@ -353,13 +353,9 @@ def main() -> None:
 
     N_STEPS = int(args.duration / SIM_DT)
 
-    # ── History for plots ──
-    t_hist: list[float] = []
-    arm_q_hist: list[np.ndarray] = []
-    arm_qd_hist: list[np.ndarray] = []
-    arm_tau_hist: list[np.ndarray] = []
-    arm_qv_hist: list[np.ndarray] = []
-    dsm_hist: list[tuple[float, float]] = []
+    # ── Per-arm CERGHistory recorders (cerg.viz) ──
+    history_left = CERGHistory()
+    history_right = CERGHistory()
 
     # ── Viewer ──
     viewer = None
@@ -445,25 +441,17 @@ def main() -> None:
         sim.step(tau_full)
         counter += 1
 
-        # Logs
-        t_hist.append(d.time)
-        arm_full_q = np.concatenate([
-            np.array([torso_q]), q_left.copy(), q_right.copy()
-        ])
-        arm_full_qd = np.concatenate([
-            np.array([torso_qd]), qd_left.copy(), qd_right.copy()
-        ])
-        arm_full_tau = np.concatenate([
-            np.array([torso_tau]), arm_tau_left.copy(), arm_tau_right.copy()
-        ])
-        arm_full_qv = np.concatenate([
-            np.array([current_target[0]]), q_v_left.copy(), q_v_right.copy()
-        ])
-        arm_q_hist.append(arm_full_q)
-        arm_qd_hist.append(arm_full_qd)
-        arm_tau_hist.append(arm_full_tau)
-        arm_qv_hist.append(arm_full_qv)
-        dsm_hist.append((cerg_left.last_dsm, cerg_right.last_dsm))
+        # Per-chain history (CERGHistory handles all four diagnostic figs)
+        history_left.record(
+            t=d.time, q=q_left.copy(), qd=qd_left.copy(),
+            q_v=q_v_left.copy(), q_r=current_target[1:8].copy(),
+            tau=arm_tau_left.copy(), dsm=cerg_left.last_dsm,
+        )
+        history_right.record(
+            t=d.time, q=q_right.copy(), qd=qd_right.copy(),
+            q_v=q_v_right.copy(), q_r=current_target[8:15].copy(),
+            tau=arm_tau_right.copy(), dsm=cerg_right.last_dsm,
+        )
 
         # Policy update at 50 Hz.  Use the *commanded* arm pose (torso target +
         # per-arm q_v) as the observation baseline so qj_scaled stays near
@@ -536,67 +524,32 @@ def main() -> None:
     print(f"Right arm q_v    : {np.round(q_v_right, 3).tolist()}")
     print(f"Right arm final q: {np.round(final_q_right, 3).tolist()}")
 
-    # ── Plots ──
+    # ── Plots (cerg.viz.CERGHistory: positions, velocities, torques, DSM) ──
     if not args.no_plots:
-        t_arr = np.array(t_hist)
-        q_arr = np.array(arm_q_hist)
-        qd_arr = np.array(arm_qd_hist)
-        tau_arr = np.array(arm_tau_hist)
-        qv_arr = np.array(arm_qv_hist)
-
-        # Upper body slots 12..26 in the handless joint list
-        arm_joint_names = [j.name.replace("_joint", "") for j in robot.joints[12:27]]
-        q_lower = robot.q_lower[7 + 12: 7 + 27]
-        q_upper = robot.q_upper[7 + 12: 7 + 27]
-        qd_max = robot.qd_max[6 + 12: 6 + 27]
-        tau_max = robot.tau_max[6 + 12: 6 + 27]
-
-        figs = plot_pd(
-            t_arr, q_arr, qd_arr, tau_arr,
-            q_target=current_target,
-            q_lower=q_lower,
-            q_upper=q_upper,
-            qd_limit=qd_max,
-            tau_limit=tau_max,
-            joint_names=arm_joint_names,
-            title="H1_2 — CERG-governed arms (q vs final target)",
-            show=False,
-        )
-
-        # Overlay q_v on the position plot to visualise CERG filtering
-        try:
-            pos_fig = figs[0]
-            for ax_idx, ax in enumerate(pos_fig.axes):
-                if ax_idx >= qv_arr.shape[1]:
-                    break
-                ax.plot(t_arr, qv_arr[:, ax_idx], "--", color="tab:orange",
-                        linewidth=1.0, label="q_v (CERG)")
-                if ax_idx == 0:
-                    ax.legend(loc="best", fontsize=7)
-        except Exception as e:
-            print(f"[warn] Could not overlay q_v: {e}")
-
         plots_dir = _HERE.parent / "plots"
         plots_dir.mkdir(exist_ok=True)
-        labels = ["positions", "velocities", "torques"]
-        for label, fig in zip(labels, figs):
-            path = plots_dir / f"cerg_arms_{label}.png"
-            fig.savefig(path, dpi=120, bbox_inches="tight")
+        labels = ["positions", "velocities", "torques", "dsm"]
 
-        # DSM trace
-        import matplotlib.pyplot as plt
-        dsm_arr = np.array(dsm_hist)
-        fig_d, ax_d = plt.subplots(figsize=(8, 3))
-        ax_d.plot(t_arr, dsm_arr[:, 0], label="DSM left")
-        ax_d.plot(t_arr, dsm_arr[:, 1], label="DSM right")
-        ax_d.axhline(0.0, color="k", linewidth=0.5)
-        ax_d.set_xlabel("t [s]"); ax_d.set_ylabel("DSM")
-        ax_d.set_title("CERG dynamic safety margin")
-        ax_d.legend()
-        fig_d.tight_layout()
-        fig_d.savefig(plots_dir / "cerg_arms_dsm.png", dpi=120, bbox_inches="tight")
+        for chain_name, hist, sub_robot in (
+            ("left_arm",  history_left,  sub_robot_left),
+            ("right_arm", history_right, sub_robot_right),
+        ):
+            joint_names = [j.name.replace("_joint", "") for j in sub_robot.joints]
+            figs = hist.plot(
+                q_lower=sub_robot.q_lower,
+                q_upper=sub_robot.q_upper,
+                qd_limit=sub_robot.qd_max,
+                tau_limit=sub_robot.tau_max,
+                joint_names=joint_names,
+                title=f"H1_2 — CERG {chain_name}",
+                show=False,
+            )
+            for label, fig in zip(labels, figs):
+                fig.savefig(plots_dir / f"cerg_{chain_name}_{label}.png",
+                            dpi=120, bbox_inches="tight")
 
         print(f"\nPlots saved to {plots_dir}/")
+        import matplotlib.pyplot as plt
         plt.show()
 
 

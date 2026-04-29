@@ -1,8 +1,6 @@
-# Large data files (>50MB)
+# Track only experiment_config.json and workspace_summary.md.
+# Everything else in this directory is treated as a build artifact
+# and not committed.
 trajectories.npz
-
-# Keep these tracked:
-# workspace_trials.csv
-# experiment_config.json
-# workspace_summary.md
-# plots/
+workspace_trials.csv
+plots/

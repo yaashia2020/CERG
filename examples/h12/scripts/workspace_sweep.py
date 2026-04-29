@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 
 # ── Path setup ──
-_REPO_ROOT = Path(__file__).resolve().parents[1]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT))
 
 _ADAPTIVE_POLICY_DIR = Path.home() / "h12_adaptive_policy"
