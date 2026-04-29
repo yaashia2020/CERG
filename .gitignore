@@ -22,3 +22,9 @@ build/
 
 # OS
 .DS_Store
+
+# Claude Code
+.claude/
+
+# Auto-generated plot outputs
+examples/h12/plots/

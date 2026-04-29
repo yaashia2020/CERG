@@ -1,0 +1,151 @@
+{
+  "robot_model": "/home/yaashia/cerg/examples/h12/models/scene_handless.xml",
+  "standing_policy": "/home/yaashia/h12_adaptive_policy/data/rma_hand",
+  "sim_timestep": 0.002,
+  "episode_duration_sec": 4.0,
+  "num_trials": 1000,
+  "fall_height_threshold": 0.5,
+  "fall_orientation_threshold_deg": 60.0,
+  "initial_standing_height": 1.03,
+  "arm_joints": [
+    "left_shoulder_pitch",
+    "left_shoulder_roll",
+    "left_shoulder_yaw",
+    "left_elbow",
+    "left_wrist_roll",
+    "left_wrist_pitch",
+    "left_wrist_yaw",
+    "right_shoulder_pitch",
+    "right_shoulder_roll",
+    "right_shoulder_yaw",
+    "right_elbow",
+    "right_wrist_roll",
+    "right_wrist_pitch",
+    "right_wrist_yaw"
+  ],
+  "default_gains": {
+    "left_shoulder_pitch": {
+      "kp": 30.0,
+      "kd": 8.0
+    },
+    "left_shoulder_roll": {
+      "kp": 30.0,
+      "kd": 8.0
+    },
+    "left_shoulder_yaw": {
+      "kp": 15.0,
+      "kd": 4.0
+    },
+    "left_elbow": {
+      "kp": 15.0,
+      "kd": 4.0
+    },
+    "left_wrist_roll": {
+      "kp": 10.0,
+      "kd": 3.0
+    },
+    "left_wrist_pitch": {
+      "kp": 10.0,
+      "kd": 3.0
+    },
+    "left_wrist_yaw": {
+      "kp": 10.0,
+      "kd": 3.0
+    },
+    "right_shoulder_pitch": {
+      "kp": 30.0,
+      "kd": 8.0
+    },
+    "right_shoulder_roll": {
+      "kp": 30.0,
+      "kd": 8.0
+    },
+    "right_shoulder_yaw": {
+      "kp": 15.0,
+      "kd": 4.0
+    },
+    "right_elbow": {
+      "kp": 15.0,
+      "kd": 4.0
+    },
+    "right_wrist_roll": {
+      "kp": 10.0,
+      "kd": 3.0
+    },
+    "right_wrist_pitch": {
+      "kp": 10.0,
+      "kd": 3.0
+    },
+    "right_wrist_yaw": {
+      "kp": 10.0,
+      "kd": 3.0
+    }
+  },
+  "joint_limits": {
+    "left_shoulder_pitch": {
+      "lower": -3.140000104904175,
+      "upper": 1.5700000524520874
+    },
+    "left_shoulder_roll": {
+      "lower": -0.3799999952316284,
+      "upper": 3.4000000953674316
+    },
+    "left_shoulder_yaw": {
+      "lower": -2.6600000858306885,
+      "upper": 3.009999990463257
+    },
+    "left_elbow": {
+      "lower": -0.949999988079071,
+      "upper": 3.180000066757202
+    },
+    "left_wrist_roll": {
+      "lower": -3.009999990463257,
+      "upper": 2.75
+    },
+    "left_wrist_pitch": {
+      "lower": -0.4625000059604645,
+      "upper": 0.4625000059604645
+    },
+    "left_wrist_yaw": {
+      "lower": -1.2699999809265137,
+      "upper": 1.2699999809265137
+    },
+    "right_shoulder_pitch": {
+      "lower": -3.140000104904175,
+      "upper": 1.5700000524520874
+    },
+    "right_shoulder_roll": {
+      "lower": -3.4000000953674316,
+      "upper": 0.3799999952316284
+    },
+    "right_shoulder_yaw": {
+      "lower": -3.009999990463257,
+      "upper": 2.6600000858306885
+    },
+    "right_elbow": {
+      "lower": -0.949999988079071,
+      "upper": 3.180000066757202
+    },
+    "right_wrist_roll": {
+      "lower": -2.75,
+      "upper": 3.009999990463257
+    },
+    "right_wrist_pitch": {
+      "lower": -0.4625000059604645,
+      "upper": 0.4625000059604645
+    },
+    "right_wrist_yaw": {
+      "lower": -1.2699999809265137,
+      "upper": 1.2699999809265137
+    }
+  },
+  "gain_multiplier_range": [
+    0.5,
+    1.5
+  ],
+  "traj_subsample_rate": 10,
+  "date": "2026-04-29T07:19:55.626706+00:00",
+  "mujoco_version": "3.5.0",
+  "sweep_time_sec": 130.9153025150299,
+  "seed": 42
+}

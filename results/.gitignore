@@ -1,0 +1,8 @@
+# Large data files (>50MB)
+trajectories.npz
+
+# Keep these tracked:
+# workspace_trials.csv
+# experiment_config.json
+# workspace_summary.md
+# plots/

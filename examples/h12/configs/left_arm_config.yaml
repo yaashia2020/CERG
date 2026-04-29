@@ -2,13 +2,13 @@
 # Joint order: shoulder_pitch, shoulder_roll, shoulder_yaw,
 #              elbow, wrist_roll, wrist_pitch, wrist_yaw
 #
-# Arms use lighter actuators (18-40 N·m) for manipulation tasks,
-# so gains are lower than the legs.
+# Gains match the live PD controller in run_pd_humanoid.py
+# (KP_ARMS / KD_ARMS sliced 1:8 for the left arm).
 
 # ─── Controller gains ───
-#              sh_pitch  sh_roll  sh_yaw  elbow  wr_roll  wr_pitch  wr_yaw
-Kp: [30.0,     30.0,     15.0,    15.0,   10.0,    10.0,     10.0]
-Kd: [ 8.0,      8.0,      4.0,     4.0,    3.0,     3.0,      3.0]
+#       sh_pitch  sh_roll  sh_yaw  elbow  wr_roll  wr_pitch  wr_yaw
+Kp: [500.0,    500.0,   500.0,  500.0, 500.0,   500.0,    500.0]
+Kd: [  5.0,      5.0,     7.5,    1.0,   0.3,     0.0,      0.0]
 
 # ─── Joint position limits [rad] ───
 #                sh_pitch  sh_roll  sh_yaw  elbow  wr_roll  wr_pitch  wr_yaw

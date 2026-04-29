@@ -2,12 +2,16 @@
 # Joint order: shoulder_pitch, shoulder_roll, shoulder_yaw,
 #              elbow, wrist_roll, wrist_pitch, wrist_yaw
 #
-# Symmetric with left arm — identical gains.
+# Gains match the live PD controller in run_pd_humanoid.py
+# (KP_ARMS / KD_ARMS sliced 8:15 for the right arm).
+# NOTE: the right-arm Kd differs from the left-arm Kd in the source
+# script (left puts the 7.5 on sh_yaw, right puts it on elbow). The
+# values below preserve that source-script behaviour exactly.
 
 # ─── Controller gains ───
-#              sh_pitch  sh_roll  sh_yaw  elbow  wr_roll  wr_pitch  wr_yaw
-Kp: [30.0,     30.0,     15.0,    15.0,   10.0,    10.0,     10.0]
-Kd: [ 8.0,      8.0,      4.0,     4.0,    3.0,     3.0,      3.0]
+#       sh_pitch  sh_roll  sh_yaw  elbow  wr_roll  wr_pitch  wr_yaw
+Kp: [500.0,    500.0,   500.0,  500.0, 500.0,   500.0,    500.0]
+Kd: [  5.0,      5.0,     5.0,    7.5,   1.0,     0.3,      0.0]
 
 # ─── Joint position limits [rad] ───
 #                sh_pitch  sh_roll  sh_yaw  elbow  wr_roll  wr_pitch  wr_yaw

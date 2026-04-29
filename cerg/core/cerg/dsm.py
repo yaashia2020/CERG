@@ -293,5 +293,5 @@ def compute_dsm(
 
     # Final DSM: min across all, lower bounded by 0
     dsm = min(d_tau, d_q, d_dq, d_energy, d_hard)
-    return max(0.45*dsm, 0.0)
+    return max(dsm, 0.0)
 
