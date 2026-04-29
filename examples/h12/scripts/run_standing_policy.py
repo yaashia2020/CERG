@@ -74,8 +74,6 @@ CMD_SCALE = np.array([2.0, 2.0, 0.25], dtype=np.float32)
 CMD_INIT = np.array([0.0, 0.0, 0.0], dtype=np.float32)
 HEIGHT_CMD = 1.0
 
-MAX_TORQUE = 200.0
-
 
 # ─── Helper functions ───
 
@@ -247,7 +245,6 @@ def main() -> None:
             target_dof_pos, d.qpos[7: 7 + NUM_ACTIONS], KP_LEGS,
             np.zeros_like(KP_LEGS), d.qvel[6: 6 + NUM_ACTIONS], KD_LEGS,
         )
-        leg_tau = np.clip(np.nan_to_num(leg_tau), -MAX_TORQUE, MAX_TORQUE)
 
         # Arm PD
         n_arm = n_joints - NUM_ACTIONS
@@ -256,7 +253,6 @@ def main() -> None:
             KP_ARMS[:n_arm], np.zeros(n_arm),
             d.qvel[6 + NUM_ACTIONS: 6 + n_joints], KD_ARMS[:n_arm],
         )
-        arm_tau = np.clip(np.nan_to_num(arm_tau), -MAX_TORQUE, MAX_TORQUE)
 
         # Assemble full torque and step via MuJoCoSimulator
         tau_full = np.zeros(robot.nv)

@@ -126,10 +126,16 @@ _ALL_JOINTS = [
 
 assert len(_ALL_JOINTS) == 51
 
-# Handless subset: first 27 joints (legs + torso + arms, no hand joints)
-_HANDLESS_JOINTS = _ALL_JOINTS[:27]
+# Handless subset: 27 joints matching the handless MuJoCo model's nv order.
+# In _ALL_JOINTS, hands sit between the arms:
+#   0..11  legs        12  torso        13..19  left arm
+#   20..31 left hand   32..38 right arm 39..50  right hand
+# Handless = legs + torso + left_arm + right_arm  (no hands).
+_HANDLESS_JOINTS = _ALL_JOINTS[0:20] + _ALL_JOINTS[32:39]
 
 assert len(_HANDLESS_JOINTS) == 27
+assert _HANDLESS_JOINTS[19].name == "left_wrist_yaw_joint"
+assert _HANDLESS_JOINTS[20].name == "right_shoulder_pitch_joint"
 
 
 # ──────────────────────────────────────────────────────────────────────── #
