@@ -140,7 +140,7 @@ class CERG:
         self._last_rho = rho
 
         # 2. Dynamic Safety Margin (speed)
-        dsm = compute_dsm(
+        report = compute_dsm(
             q=q,
             qd=qd,
             q_v=self._q_v,
@@ -149,7 +149,7 @@ class CERG:
             constraints=self._constraints,
             config=cfg,
         )
-        dsm *= self._dsm_scale
+        dsm = report.value * self._dsm_scale
         self._last_dsm = dsm
         # 3. ODE Euler step: dq_v/dt = DSM * rho
         self._q_v = self._q_v + dsm * rho * cfg.erg_dt

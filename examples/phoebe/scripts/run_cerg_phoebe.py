@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from cerg.controllers.pd import PDController
 from cerg.core.cerg.auxiliary_reference import CERG
 from cerg.core.config import CERGConfig
+from cerg.core.scene import load_scene_config
 from cerg.simulators.mujoco_sim import MuJoCoSimulator
 from cerg.viz import CERGHistory
 from examples.phoebe.phoebe_mujoco import build_viz_model
@@ -33,8 +34,7 @@ N_STEPS = 90000  # 60s at 1kHz
 
 _HERE          = Path(__file__).resolve().parent
 _PLOTS_DIR     = _HERE.parent / "plots"
-Q_TARGET_LEFT  = np.array([8.0, -8.0,  5.0, -8.0, 8.0, 8.0])
-Q_TARGET_RIGHT = np.array([8.0, -8.0,  5.0, -8.0, 8.0, 8.0])
+_SCENE_PATH    = _HERE.parent / "configs" / "scenes" / "free_space.yaml"
 _JOINT_NAMES   = ["pan", "lift", "elbow", "w1", "w2", "w3"]
 
 
@@ -62,9 +62,16 @@ def main() -> None:
     left_cerg  = CERG(left_sim,  left_robot,  constraints=[], config=cfg)
     right_cerg = CERG(right_sim, right_robot, constraints=[], config=cfg)
 
-    q0 = np.zeros(6)
-    left_sim.reset(q0=q0);   right_sim.reset(q0=q0)
-    left_cerg.reset(q0);     right_cerg.reset(q0)
+    scenes = load_scene_config(
+        _SCENE_PATH,
+        joint_orders={
+            "left_arm":  [j.name for j in left_robot.joints],
+            "right_arm": [j.name for j in right_robot.joints],
+        },
+    )
+    left, right = scenes["left_arm"], scenes["right_arm"]
+    left_sim.reset(q0=left.q0);    right_sim.reset(q0=right.q0)
+    left_cerg.reset(left.q0);      right_cerg.reset(right.q0)
 
     left_history  = CERGHistory()
     right_history = CERGHistory()
@@ -88,23 +95,23 @@ def main() -> None:
         if k % 5000 == 0:
             print(f"  step {k}/{N_STEPS}  t={k*DT:.1f}s")
         l_state = left_sim.get_state()
-        l_qv    = left_cerg.step(l_state.q, l_state.qd, Q_TARGET_LEFT)
+        l_qv    = left_cerg.step(l_state.q, l_state.qd, left.q_target)
         l_tau   = left_ctrl.compute(l_state, l_qv)
         left_sim.step(l_tau)
 
         r_state = right_sim.get_state()
-        r_qv    = right_cerg.step(r_state.q, r_state.qd, Q_TARGET_RIGHT)
+        r_qv    = right_cerg.step(r_state.q, r_state.qd, right.q_target)
         r_tau   = right_ctrl.compute(r_state, r_qv)
         right_sim.step(r_tau)
 
         left_history.record(
             t=l_state.t, q=l_state.q, qd=l_state.qd,
-            q_v=l_qv, q_r=Q_TARGET_LEFT, tau=l_tau,
+            q_v=l_qv, q_r=left.q_target, tau=l_tau,
             dsm=left_cerg.last_dsm,
         )
         right_history.record(
             t=r_state.t, q=r_state.q, qd=r_state.qd,
-            q_v=r_qv, q_r=Q_TARGET_RIGHT, tau=r_tau,
+            q_v=r_qv, q_r=right.q_target, tau=r_tau,
             dsm=right_cerg.last_dsm,
         )
 
@@ -128,13 +135,13 @@ def main() -> None:
     l_final = left_sim.get_state()
     r_final = right_sim.get_state()
     print("\n── Left arm ──")
-    print(f"  q_target : {Q_TARGET_LEFT}")
+    print(f"  q_target : {left.q_target}")
     print(f"  q_final  : {l_final.q}")
-    print(f"  error    : {np.abs(Q_TARGET_LEFT  - l_final.q)}")
+    print(f"  error    : {np.abs(left.q_target  - l_final.q)}")
     print("\n── Right arm ──")
-    print(f"  q_target : {Q_TARGET_RIGHT}")
+    print(f"  q_target : {right.q_target}")
     print(f"  q_final  : {r_final.q}")
-    print(f"  error    : {np.abs(Q_TARGET_RIGHT - r_final.q)}")
+    print(f"  error    : {np.abs(right.q_target - r_final.q)}")
 
     if not args.no_plots:
         plot_kwargs = dict(

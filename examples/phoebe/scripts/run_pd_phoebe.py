@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from cerg.controllers.pd import PDController
 from cerg.core.config import CERGConfig
+from cerg.core.scene import load_scene_config
 from cerg.simulators.mujoco_sim import MuJoCoSimulator
 from cerg.viz import plot_pd
 from examples.phoebe.phoebe_mujoco import build_viz_model
@@ -32,8 +33,7 @@ N_STEPS = 15_000
 
 _HERE          = Path(__file__).resolve().parent
 _PLOTS_DIR     = _HERE.parent / "plots"
-Q_TARGET_LEFT  = np.array([0.0, -1.0,  1.5, -0.5, 0.0, 0.0])
-Q_TARGET_RIGHT = np.array([0.0, -1.0,  1.5, -0.5, 0.0, 0.0])
+_SCENE_PATH    = _HERE.parent / "configs" / "scenes" / "pd_demo.yaml"
 _JOINT_NAMES   = ["pan", "lift", "elbow", "w1", "w2", "w3"]
 
 
@@ -59,8 +59,16 @@ def main() -> None:
     left_ctrl  = PDController.from_config(cfg, left_sim)
     right_ctrl = PDController.from_config(cfg, right_sim)
 
-    left_sim.reset(q0=np.zeros(6))
-    right_sim.reset(q0=np.zeros(6))
+    scenes = load_scene_config(
+        _SCENE_PATH,
+        joint_orders={
+            "left_arm":  [j.name for j in left_robot.joints],
+            "right_arm": [j.name for j in right_robot.joints],
+        },
+    )
+    left, right = scenes["left_arm"], scenes["right_arm"]
+    left_sim.reset(q0=left.q0)
+    right_sim.reset(q0=right.q0)
 
     # Native MuJoCo viewer (passive GLFW window, non-blocking)
     viewer, viz_model, viz_data, arm_joints = None, None, None, None
@@ -84,11 +92,11 @@ def main() -> None:
     print(f"Running {N_STEPS} steps...")
     for k in range(N_STEPS):
         l_state = left_sim.get_state()
-        l_tau   = left_ctrl.compute(l_state, Q_TARGET_LEFT)
+        l_tau   = left_ctrl.compute(l_state, left.q_target)
         left_sim.step(l_tau)
 
         r_state = right_sim.get_state()
-        r_tau   = right_ctrl.compute(r_state, Q_TARGET_RIGHT)
+        r_tau   = right_ctrl.compute(r_state, right.q_target)
         right_sim.step(r_tau)
 
         t_hist.append(l_state.t)
@@ -115,13 +123,13 @@ def main() -> None:
     l_final = left_sim.get_state()
     r_final = right_sim.get_state()
     print("\n── Left arm ──")
-    print(f"  q_target : {Q_TARGET_LEFT}")
+    print(f"  q_target : {left.q_target}")
     print(f"  q_final  : {l_final.q}")
-    print(f"  error    : {np.abs(Q_TARGET_LEFT  - l_final.q)}")
+    print(f"  error    : {np.abs(left.q_target  - l_final.q)}")
     print("\n── Right arm ──")
-    print(f"  q_target : {Q_TARGET_RIGHT}")
+    print(f"  q_target : {right.q_target}")
     print(f"  q_final  : {r_final.q}")
-    print(f"  error    : {np.abs(Q_TARGET_RIGHT - r_final.q)}")
+    print(f"  error    : {np.abs(right.q_target - r_final.q)}")
 
     if not args.no_plots:
         t_arr = np.array(t_hist)
@@ -134,9 +142,9 @@ def main() -> None:
             show=False,
         )
         figs_l = plot_pd(t_arr, np.array(ql), np.array(qdl), np.array(taul),
-                         q_target=Q_TARGET_LEFT,  title="Left arm",  **plot_kwargs)
+                         q_target=left.q_target,  title="Left arm",  **plot_kwargs)
         figs_r = plot_pd(t_arr, np.array(qr), np.array(qdr), np.array(taur),
-                         q_target=Q_TARGET_RIGHT, title="Right arm", **plot_kwargs)
+                         q_target=right.q_target, title="Right arm", **plot_kwargs)
 
         _PLOTS_DIR.mkdir(exist_ok=True)
         labels = ["positions", "velocities", "torques"]

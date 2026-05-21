@@ -6,7 +6,13 @@ from cerg.core.cerg.constraints import (
     HalfSpaceConstraint,
     load_constraints,
 )
-from cerg.core.cerg.dsm import compute_dsm, predict_trajectory, PredictionResult
+from cerg.core.cerg.dsm import (
+    DSMContribution,
+    DSMReport,
+    compute_dsm,
+    predict_trajectory,
+    PredictionResult,
+)
 from cerg.core.cerg.navigation_field import compute_navigation_field
 from cerg.core.config import CERGConfig
 
@@ -19,5 +25,7 @@ __all__ = [
     "compute_dsm",
     "predict_trajectory",
     "PredictionResult",
+    "DSMContribution",
+    "DSMReport",
     "compute_navigation_field",
 ]

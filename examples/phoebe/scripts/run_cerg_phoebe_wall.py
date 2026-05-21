@@ -28,6 +28,7 @@ from cerg.controllers.pd import PDController
 from cerg.core.cerg.auxiliary_reference import CERG
 from cerg.core.cerg.constraints import load_constraints
 from cerg.core.config import CERGConfig
+from cerg.core.scene import load_scene_config
 from cerg.simulators.mujoco_sim import MuJoCoSimulator
 from cerg.viz import CERGHistory
 from examples.phoebe.phoebe_mujoco import build_viz_model
@@ -42,17 +43,9 @@ _PLOTS_DIR   = _EXAMPLE_DIR / "plots"
 
 _WALL_XML         = _EXAMPLE_DIR / "models" / "wall.xml"
 _WALL_CONSTRAINTS = _EXAMPLE_DIR / "configs" / "wall_constraints.yaml"
-
-# Single target INSIDE the wall (y=0) — same for both arms.
-# Computed via analytical IK (solve_ik_wall.py) at world pos [0.7, 0, 1.25].
-Q_TARGET_LEFT  = np.array([-2.3196, -2.9655, -1.3368, 0.2503, 0.4784, -1.6183])
-Q_TARGET_RIGHT = np.array([ 2.3227, -0.3204,  1.1638, -0.7448, 0.2556, -0.5023])
+_SCENE_PATH      = _EXAMPLE_DIR / "configs" / "scenes" / "wall.yaml"
 
 _JOINT_NAMES = ["pan", "lift", "elbow", "w1", "w2", "w3"]
-
-# Initial poses — both arms clear of the wall (from solve_ik_wall.py --pose)
-Q0_LEFT  = np.array([-2.0734, -1.8849, -1.6024, -1.0681, 0.377, -1.0681])
-Q0_RIGHT = np.array([ 2.0106, -1.3194,  1.8538, -0.942, -0.0628, 0.0])
 
 # Wall half-thickness in y (must match wall.xml size[1])
 WALL_HALF_Y = 0.15
@@ -99,8 +92,16 @@ def main() -> None:
     left_cerg  = CERG(left_sim,  left_robot,  constraints=[cs["left"]],  config=cfg_left,  dsm_scale=ALPHA_LEFT)
     right_cerg = CERG(right_sim, right_robot, constraints=[cs["right"]], config=cfg_right, dsm_scale=ALPHA_RIGHT)
 
-    left_sim.reset(q0=Q0_LEFT);    right_sim.reset(q0=Q0_RIGHT)
-    left_cerg.reset(Q0_LEFT);      right_cerg.reset(Q0_RIGHT)
+    scenes = load_scene_config(
+        _SCENE_PATH,
+        joint_orders={
+            "left_arm":  [j.name for j in left_robot.joints],
+            "right_arm": [j.name for j in right_robot.joints],
+        },
+    )
+    left, right = scenes["left_arm"], scenes["right_arm"]
+    left_sim.reset(q0=left.q0);    right_sim.reset(q0=right.q0)
+    left_cerg.reset(left.q0);      right_cerg.reset(right.q0)
 
     left_history  = CERGHistory()
     right_history = CERGHistory()
@@ -117,9 +118,9 @@ def main() -> None:
     </body>"""
             viz_model, viz_data, arm_joints = build_viz_model(extra_bodies=[wall_xml, target_geom])
             for i, adr in enumerate(arm_joints["left"]):
-                viz_data.qpos[adr] = Q0_LEFT[i]
+                viz_data.qpos[adr] = left.q0[i]
             for i, adr in enumerate(arm_joints["right"]):
-                viz_data.qpos[adr] = Q0_RIGHT[i]
+                viz_data.qpos[adr] = right.q0[i]
             _mj.mj_forward(viz_model, viz_data)
             viewer = _mj_viewer.launch_passive(viz_model, viz_data)
             # Set default camera: front view of robot + wall
@@ -144,12 +145,12 @@ def main() -> None:
             print(f"  step {k}/{N_STEPS}  t={k*DT:.1f}s")
 
         l_state = left_sim.get_state()
-        l_qv    = left_cerg.step(l_state.q, l_state.qd, Q_TARGET_LEFT)
+        l_qv    = left_cerg.step(l_state.q, l_state.qd, left.q_target)
         l_tau   = left_ctrl.compute(l_state, l_qv)
         left_sim.step(l_tau)
 
         r_state = right_sim.get_state()
-        r_qv    = right_cerg.step(r_state.q, r_state.qd, Q_TARGET_RIGHT)
+        r_qv    = right_cerg.step(r_state.q, r_state.qd, right.q_target)
         r_tau   = right_ctrl.compute(r_state, r_qv)
         right_sim.step(r_tau)
 
@@ -180,13 +181,13 @@ def main() -> None:
 
         left_history.record(
             t=l_state.t, q=l_state.q, qd=l_state.qd,
-            q_v=l_qv, q_r=Q_TARGET_LEFT, tau=l_tau,
+            q_v=l_qv, q_r=left.q_target, tau=l_tau,
             dsm=left_cerg.last_dsm, energy=l_energy,
             soft_contact=l_contact_now,
         )
         right_history.record(
             t=r_state.t, q=r_state.q, qd=r_state.qd,
-            q_v=r_qv, q_r=Q_TARGET_RIGHT, tau=r_tau,
+            q_v=r_qv, q_r=right.q_target, tau=r_tau,
             dsm=right_cerg.last_dsm, energy=r_energy,
             soft_contact=r_contact_now,
         )
@@ -211,13 +212,13 @@ def main() -> None:
     l_final = left_sim.get_state()
     r_final = right_sim.get_state()
     print("\n── Left arm ──")
-    print(f"  q_target : {Q_TARGET_LEFT}")
+    print(f"  q_target : {left.q_target}")
     print(f"  q_final  : {l_final.q}")
-    print(f"  error    : {np.abs(Q_TARGET_LEFT  - l_final.q)}")
+    print(f"  error    : {np.abs(left.q_target  - l_final.q)}")
     print("\n── Right arm ──")
-    print(f"  q_target : {Q_TARGET_RIGHT}")
+    print(f"  q_target : {right.q_target}")
     print(f"  q_final  : {r_final.q}")
-    print(f"  error    : {np.abs(Q_TARGET_RIGHT - r_final.q)}")
+    print(f"  error    : {np.abs(right.q_target - r_final.q)}")
 
     if not args.no_plots:
         _common_plot = dict(

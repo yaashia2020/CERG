@@ -29,6 +29,7 @@ class Constraint(ABC):
     """Base class for environment constraints."""
 
     kind: ConstraintKind
+    name: str
 
     @abstractmethod
     def signed_distance(self, point: np.ndarray) -> float:
@@ -73,6 +74,7 @@ class HalfSpaceConstraint(Constraint):
     normal: np.ndarray
     offset: float
     kind: ConstraintKind = "soft"
+    name: str = ""
 
     def __post_init__(self):
         self.normal = np.asarray(self.normal, dtype=float)
@@ -152,14 +154,15 @@ def load_constraints(path: str | Path) -> dict[str, Constraint]:
         if builder is None:
             raise ValueError(f"Unknown constraint type '{ctype}'. Available: {list(_BUILDERS)}")
         name = entry.get("name", str(i))
-        constraints[name] = builder(entry)
+        constraints[name] = builder(entry, name)
 
     return constraints
 
 
-def _build_half_space(entry: dict) -> HalfSpaceConstraint:
+def _build_half_space(entry: dict, name: str) -> HalfSpaceConstraint:
     return HalfSpaceConstraint(
         normal=np.asarray(entry["normal"], dtype=float),
         offset=float(entry["offset"]),
         kind=entry.get("kind", "soft"),
+        name=name,
     )

@@ -1,0 +1,25 @@
+# Phoebe dual-arm free-space scenario.
+# Both arms start at the zero configuration; both chase a far-away target
+# without any environment constraint — exercises pure CERG attraction.
+
+left_arm:
+  joint_names:
+    - left_ur_arm_shoulder_pan_joint
+    - left_ur_arm_shoulder_lift_joint
+    - left_ur_arm_elbow_joint
+    - left_ur_arm_wrist_1_joint
+    - left_ur_arm_wrist_2_joint
+    - left_ur_arm_wrist_3_joint
+  q0:       [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  q_target: [8.0, -8.0, 5.0, -8.0, 8.0, 8.0]
+
+right_arm:
+  joint_names:
+    - right_ur_arm_shoulder_pan_joint
+    - right_ur_arm_shoulder_lift_joint
+    - right_ur_arm_elbow_joint
+    - right_ur_arm_wrist_1_joint
+    - right_ur_arm_wrist_2_joint
+    - right_ur_arm_wrist_3_joint
+  q0:       [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  q_target: [8.0, -8.0, 5.0, -8.0, 8.0, 8.0]
