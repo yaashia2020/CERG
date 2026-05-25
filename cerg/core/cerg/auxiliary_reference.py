@@ -61,6 +61,7 @@ class CERG:
 
         # Last computed values (for logging / debugging)
         self._last_dsm: float = 0.0
+        self._last_dsm_breakdown: dict | None = None
         self._last_rho: np.ndarray | None = None
 
     @property
@@ -104,6 +105,18 @@ class CERG:
         return self._last_dsm
 
     @property
+    def last_dsm_breakdown(self) -> dict | None:
+        """Per-component DSM breakdown from the most recent step() call.
+
+        ``{name: {"value": float, "info": dict}}`` for name in
+        {"tau", "q", "dq", "soft", "hard", "energy"}.  Each ``info`` dict
+        identifies WHERE in the prediction trajectory the component
+        achieved its minimum.  Useful for spotting which constraint is
+        actively governing CERG when ``last_dsm`` approaches 0.
+        """
+        return self._last_dsm_breakdown
+
+    @property
     def last_rho(self) -> np.ndarray | None:
         """Last computed navigation field (for debugging / logging)."""
         return self._last_rho.copy() if self._last_rho is not None else None
@@ -138,7 +151,7 @@ class CERG:
         self._last_rho = rho
 
         # 2. Dynamic Safety Margin (speed)
-        dsm = compute_dsm(
+        dsm, breakdown = compute_dsm(
             q=q,
             qd=qd,
             q_v=self._q_v,
@@ -148,6 +161,7 @@ class CERG:
             config=cfg,
         )
         self._last_dsm = dsm
+        self._last_dsm_breakdown = breakdown
         # if np.all(dsm * rho * cfg.erg_dt == 0):
         #     breakpoint()
         # 3. ODE Euler step: dq_v/dt = DSM * rho

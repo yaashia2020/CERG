@@ -33,9 +33,15 @@ from cerg.simulators.mujoco_sim import MuJoCoSimulator
 class ChainSubRobot(RobotModel):
     """RobotModel view over a contiguous slice of an existing robot's joints."""
 
-    def __init__(self, joints: list[JointInfo], name: str) -> None:
+    def __init__(
+        self,
+        joints: list[JointInfo],
+        name: str,
+        body_names: list[str] | None = None,
+    ) -> None:
         self._joints = list(joints)
         self._name = name
+        self._body_names = list(body_names) if body_names is not None else []
 
     @property
     def name(self) -> str:
@@ -55,7 +61,7 @@ class ChainSubRobot(RobotModel):
 
     @property
     def body_names(self) -> list[str]:
-        return []
+        return list(self._body_names)
 
     def urdf_path(self):
         return None
