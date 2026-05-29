@@ -23,7 +23,8 @@ from numpy.testing import assert_allclose
 from cerg.core.config import CERGConfig
 from cerg.core.cerg.auxiliary_reference import CERG
 from cerg.core.cerg.constraints import HalfSpaceConstraint
-from cerg.core.cerg.dsm import compute_dsm
+from cerg.core.cerg.dsm import DSMReport, compute_dsm
+from cerg.core.robot import Q0ValidationError
 from cerg.core.scene import JointSetScene, load_scene_config
 from cerg.controllers.pd import PDController
 from cerg.robots.rrr import RRRRobot
@@ -150,6 +151,97 @@ class TestCERGUnit:
             f"q_v not converging to new target B: "
             f"start dist {dist_to_b_start:.4f}, end dist {dist_to_b_end:.4f}"
         )
+
+    # -- last_dsm_report ------------------------------------------------- #
+
+    def test_last_dsm_report_is_none_before_step(self, sim, robot, config):
+        cerg = CERG(sim, robot, config=config)
+        cerg.reset(np.zeros(3))
+        assert cerg.last_dsm_report is None
+
+    def test_last_dsm_report_populated_after_step(self, sim, robot, config):
+        cerg = CERG(sim, robot, config=config)
+        q = np.array([0.1, 0.2, 0.3])
+        cerg.reset(q.copy())
+        cerg.step(q, np.zeros(3), np.array([0.5, 0.5, 0.5]))
+        report = cerg.last_dsm_report
+        assert isinstance(report, DSMReport)
+        assert isinstance(report.value, float)
+        assert isinstance(report.active, list)
+
+    def test_last_dsm_matches_report_value(self, sim, robot, config):
+        """cerg.last_dsm equals report.value * dsm_scale (default 1.0)."""
+        cerg = CERG(sim, robot, config=config, dsm_scale=1.0)
+        q = np.array([0.1, 0.2, 0.3])
+        cerg.reset(q.copy())
+        cerg.step(q, np.zeros(3), np.array([0.5, 0.5, 0.5]))
+        assert cerg.last_dsm == cerg.last_dsm_report.value
+
+    def test_last_dsm_report_active_contributions_are_violating(self, sim, robot, config):
+        """Every contribution listed in `active` has margin < 0."""
+        cerg = CERG(sim, robot, config=config)
+        q = np.array([0.0, 0.0, 0.0])
+        cerg.reset(q.copy())
+        cerg.step(q, np.zeros(3), np.array([0.5, 0.5, 0.5]))
+        report = cerg.last_dsm_report
+        for c in report.active:
+            assert c.margin < 0, f"active contribution {c} has non-negative margin"
+
+    def test_step_does_not_double_compute_dsm(self, sim, robot, config):
+        """A single step() should call compute_dsm exactly once."""
+        from unittest.mock import patch
+        cerg = CERG(sim, robot, config=config)
+        q = np.array([0.0, 0.0, 0.0])
+        cerg.reset(q.copy())
+        with patch(
+            "cerg.core.cerg.auxiliary_reference.compute_dsm",
+            wraps=compute_dsm,
+        ) as mock_cd:
+            cerg.step(q, np.zeros(3), np.array([0.5, 0.5, 0.5]))
+        assert mock_cd.call_count == 1, (
+            f"expected one compute_dsm call per step, got {mock_cd.call_count}"
+        )
+
+    def test_last_dsm_report_resets_to_none(self, sim, robot, config):
+        """reset() must clear last_dsm_report back to None."""
+        cerg = CERG(sim, robot, config=config)
+        q = np.array([0.1, 0.2, 0.3])
+        cerg.reset(q.copy())
+        cerg.step(q, np.zeros(3), np.array([0.5, 0.5, 0.5]))
+        assert cerg.last_dsm_report is not None
+        cerg.reset(q.copy())
+        assert cerg.last_dsm_report is None
+
+    # -- validate_q0 (via RobotModel + CERG.reset) ----------------------- #
+
+    def test_validate_q0_passes_for_valid_config(self, robot):
+        """A configuration well inside the joint limits should not raise."""
+        robot.validate_q0(np.zeros(robot.nq))
+
+    def test_validate_q0_raises_for_out_of_limits(self, robot):
+        """A q0 outside the joint limits must raise Q0ValidationError naming the joint."""
+        q_bad = robot.q_upper.copy()
+        q_bad[0] += 1.0  # push first joint above upper limit
+        with pytest.raises(Q0ValidationError) as exc_info:
+            robot.validate_q0(q_bad)
+        assert robot.joints[0].name in str(exc_info.value)
+
+    def test_validate_q0_raises_for_shape_mismatch(self, robot):
+        """A q0 of the wrong length must raise Q0ValidationError."""
+        with pytest.raises(Q0ValidationError):
+            robot.validate_q0(np.zeros(robot.nq + 1))
+
+    def test_cerg_reset_calls_validate_q0(self, sim, robot, config):
+        """CERG.reset must enforce robot.validate_q0 — bad q0 raises."""
+        cerg = CERG(sim, robot, config=config)
+        q_bad = robot.q_upper + 1.0  # every joint above its upper limit
+        with pytest.raises(Q0ValidationError):
+            cerg.reset(q_bad)
+
+    def test_cerg_reset_accepts_valid_q0(self, sim, robot, config):
+        """A valid q0 must not raise (regression — make sure we didn't break reset)."""
+        cerg = CERG(sim, robot, config=config)
+        cerg.reset(np.zeros(robot.nq))  # well inside limits
 
 
 # ------------------------------------------------------------------ #
@@ -1173,13 +1265,10 @@ class TestDSMReportClosedLoop:
 
         for sim_step in range(5000):
             state = sim.get_state()
-            # Pull the report directly (cerg.last_dsm_report does not exist).
-            report = compute_dsm(
-                q=state.q, qd=state.qd, q_v=cerg.q_v,
-                simulator=sim, robot=robot,
-                constraints=[wall], config=config,
-            )
             q_v = cerg.step(state.q, state.qd, q_r)
+            # last_dsm_report is the report computed inside step() at the
+            # pre-step q_v — same value as recomputing compute_dsm here.
+            report = cerg.last_dsm_report
             tau = controller.compute(state, q_v)
             sim.step(tau)
 

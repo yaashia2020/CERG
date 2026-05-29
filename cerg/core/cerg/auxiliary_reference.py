@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 
 from cerg.core.cerg.constraints import Constraint
-from cerg.core.cerg.dsm import compute_dsm
+from cerg.core.cerg.dsm import DSMReport, compute_dsm
 from cerg.core.cerg.navigation_field import compute_navigation_field
 from cerg.core.config import CERGConfig
 from cerg.core.robot import RobotModel
@@ -63,6 +63,7 @@ class CERG:
 
         # Last computed values (for logging / debugging)
         self._last_dsm: float = 0.0
+        self._last_dsm_report: DSMReport | None = None
         self._last_rho: np.ndarray | None = None
 
     @property
@@ -73,9 +74,13 @@ class CERG:
     def reset(self, q_v0: np.ndarray) -> None:
         """Set the initial auxiliary reference.
 
-        Raises ValueError if any robot body violates a constraint at q_v0.
+        Raises Q0ValidationError if q0 fails ``robot.validate_q0`` (joint
+        limits, plus any robot-specific overrides). Raises ValueError if
+        any robot body violates an environment constraint at q_v0.
         """
         q_v0 = np.asarray(q_v0, dtype=float).copy()
+
+        self._robot.validate_q0(q_v0, self._sim)
 
         if self._constraints:
             body_names = self._robot.body_names
@@ -91,6 +96,7 @@ class CERG:
 
         self._q_v = q_v0
         self._last_dsm = 0.0
+        self._last_dsm_report = None
         self._last_rho = None
 
     @property
@@ -104,6 +110,17 @@ class CERG:
     def last_dsm(self) -> float:
         """Last computed DSM value (for debugging / logging)."""
         return self._last_dsm
+
+    @property
+    def last_dsm_report(self) -> DSMReport | None:
+        """Full DSMReport from the last step() call.
+
+        None before the first step (and after reset). Holds the same scalar
+        as ``last_dsm`` in ``.value``, plus the binding contribution and the
+        full list of active (violating) contributions — useful for telemetry
+        without recomputing ``compute_dsm`` externally.
+        """
+        return self._last_dsm_report
 
     @property
     def last_rho(self) -> np.ndarray | None:
@@ -151,6 +168,7 @@ class CERG:
         )
         dsm = report.value * self._dsm_scale
         self._last_dsm = dsm
+        self._last_dsm_report = report
         # 3. ODE Euler step: dq_v/dt = DSM * rho
         self._q_v = self._q_v + dsm * rho * cfg.erg_dt
 

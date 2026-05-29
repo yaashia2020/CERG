@@ -45,9 +45,15 @@ optional; omit any you don't have.
 
 from __future__ import annotations
 
+import os
+import pickle
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from cerg.core.robot import RobotModel
 
 
 def open_meshcat(sim, *, prompt: str = "\nOpen the Meshcat URL in your browser, then press Enter to start...") -> None:
@@ -151,6 +157,32 @@ class CERGHistory:
 
     def __len__(self) -> int:
         return len(self._steps)
+
+    # ── Persistence ───────────────────────────────────────────────────── #
+
+    def save(self, path: str, robot: "RobotModel", *, arm: str = "") -> None:
+        """Pickle this history plus the robot metadata that plot() needs.
+
+        The bundle is a dict with the keys consumed by :func:`view` — keep
+        the schema in sync with that function if you extend it.
+        """
+        bundle = {
+            "history": self,
+            "arm": arm,
+            "joint_names": [j.name for j in robot.joints],
+            "q_lower": robot.q_lower,
+            "q_upper": robot.q_upper,
+            "qd_max":  robot.qd_max,
+            "tau_max": robot.tau_max,
+        }
+        with open(path, "wb") as f:
+            pickle.dump(bundle, f)
+
+    @classmethod
+    def load(cls, path: str) -> dict:
+        """Unpickle a bundle previously written by :meth:`save`."""
+        with open(path, "rb") as f:
+            return pickle.load(f)
 
     # ── Array accessors ───────────────────────────────────────────────── #
 
@@ -640,3 +672,81 @@ def _fig_dsm_energy(t, dsm, energy, contact_times, E_max, suptitle):
 
     fig.tight_layout()
     return fig
+
+
+# ──────────────────────────────────────────────────────────────────────── #
+#  Pickle viewer                                                            #
+# ──────────────────────────────────────────────────────────────────────── #
+
+def view(
+    path: str,
+    *,
+    show: bool = True,
+    save_dir: str | None = None,
+) -> list:
+    """Load a pickle saved by :meth:`CERGHistory.save` and plot it.
+
+    Parameters
+    ----------
+    path     : path to the pickled bundle.
+    show     : if True, calls ``plt.show()`` to open interactive windows.
+    save_dir : if given, writes one PNG per figure into this directory
+               (e.g. ``left_positions.png``). Directory is created if missing.
+               ``show`` and ``save_dir`` are independent — set both to do both,
+               set ``show=False`` and a directory to render headlessly.
+
+    Returns the list of matplotlib figures from ``CERGHistory.plot``.
+    """
+    bundle = CERGHistory.load(path)
+    history: CERGHistory = bundle["history"]
+    arm = bundle.get("arm", "")
+
+    if len(history) == 0:
+        raise RuntimeError(f"pickle contains no samples (arm={arm!r})")
+
+    figs = history.plot(
+        q_lower=bundle["q_lower"],
+        q_upper=bundle["q_upper"],
+        qd_limit=bundle["qd_max"],
+        tau_limit=bundle["tau_max"],
+        joint_names=list(bundle["joint_names"]),
+        title=f"CERG run — {arm} ({os.path.basename(path)})",
+        show=False,  # we control show ourselves, after optional PNG dump
+    )
+
+    if save_dir is not None:
+        os.makedirs(save_dir, exist_ok=True)
+        prefix = f"{arm}_" if arm else ""
+        names = ["positions", "velocities", "torques", "dsm_energy", "ee_positions"]
+        for fig, name in zip(figs, names):
+            fig.savefig(os.path.join(save_dir, f"{prefix}{name}.png"),
+                        dpi=120, bbox_inches="tight")
+
+    if show:
+        import matplotlib.pyplot as plt
+        plt.show()
+
+    return figs
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    ap = argparse.ArgumentParser(
+        prog="python -m cerg.viz",
+        description="Open a CERGHistory pickle and either show or save plots.",
+    )
+    ap.add_argument("pickle_path",
+                    help="Path to the .pkl saved by CERGHistory.save().")
+    ap.add_argument("--save-dir", default=None,
+                    help="If given, save one PNG per figure into this directory.")
+    ap.add_argument("--no-show", action="store_true",
+                    help="Don't open interactive windows (use with --save-dir).")
+    args = ap.parse_args()
+
+    try:
+        view(args.pickle_path, show=not args.no_show, save_dir=args.save_dir)
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
