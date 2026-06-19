@@ -139,12 +139,15 @@ class MuJoCoSimulator(Simulator):
         return self.get_state()
 
     def step(self, tau: np.ndarray) -> RobotState:
-        tau_clipped = np.clip(tau, -self._robot.tau_max, self._robot.tau_max)
+        # No torque clipping: torque/limit constraints are enforced internally
+        # by the CERG governor, not the plant. The simulator applies whatever
+        # torque it is given so any constraint violation stays observable.
+        tau = np.asarray(tau, dtype=float)
         # Apply torques as direct generalized forces (works with or without
         # actuator definitions in the model file).
-        self._data.qfrc_applied[:self._robot.nv] = tau_clipped
+        self._data.qfrc_applied[:self._robot.nv] = tau
         mujoco.mj_step(self._model, self._data)
-        return self._build_state(tau_clipped)
+        return self._build_state(tau)
 
     def get_state(self) -> RobotState:
         return self._build_state()
