@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 
 from cerg.core.cerg.constraints import Constraint
-from cerg.core.cerg.dsm import compute_dsm
+from cerg.core.cerg.dsm import compute_dsm, DSMReport
 from cerg.core.cerg.navigation_field import compute_navigation_field
 from cerg.core.config import CERGConfig
 from cerg.core.robot import RobotModel
@@ -50,18 +50,24 @@ class CERG:
         robot: RobotModel,
         constraints: list[Constraint] | None = None,
         config: CERGConfig | None = None,
+        dsm_scale: float = 10.0,
     ):
         self._sim = simulator
         self._robot = robot
         self._constraints = constraints or []
         self._config = config or CERGConfig()
+        # Scalar applied to the raw compute_dsm value to get the DSM that drives
+        # q_v.  Phoebe moved this out of dsm.py (which now returns the unscaled
+        # margin) into the auxiliary reference; default 10.0 preserves the
+        # humanoid branch's previous max(10*min, 0) behavior.
+        self._dsm_scale = float(dsm_scale)
 
         # State
         self._q_v: np.ndarray | None = None
 
         # Last computed values (for logging / debugging)
         self._last_dsm: float = 0.0
-        self._last_dsm_breakdown: dict | None = None
+        self._last_dsm_report: DSMReport | None = None
         self._last_rho: np.ndarray | None = None
 
     @property
@@ -105,16 +111,17 @@ class CERG:
         return self._last_dsm
 
     @property
-    def last_dsm_breakdown(self) -> dict | None:
-        """Per-component DSM breakdown from the most recent step() call.
+    def last_dsm_report(self) -> DSMReport | None:
+        """Full structured DSMReport from the most recent step() call.
 
-        ``{name: {"value": float, "info": dict}}`` for name in
-        {"tau", "q", "dq", "soft", "hard", "energy"}.  Each ``info`` dict
-        identifies WHERE in the prediction trajectory the component
-        achieved its minimum.  Useful for spotting which constraint is
-        actively governing CERG when ``last_dsm`` approaches 0.
+        Carries the same scalar as ``last_dsm`` (in ``.value``, before the
+        dsm_scale multiply), the single most-restrictive ``.binding``
+        contribution, and ``.active`` — every contribution whose predicted
+        margin went negative.  This is what to inspect to see WHICH constraint
+        drove DSM toward 0 (e.g. the energy bound when q_v ran away from a
+        frozen q_meas on hardware).
         """
-        return self._last_dsm_breakdown
+        return self._last_dsm_report
 
     @property
     def last_rho(self) -> np.ndarray | None:
@@ -150,8 +157,9 @@ class CERG:
         )
         self._last_rho = rho
 
-        # 2. Dynamic Safety Margin (speed)
-        dsm, breakdown = compute_dsm(
+        # 2. Dynamic Safety Margin (speed).  compute_dsm now returns a
+        #    structured DSMReport (phoebe); .value is the unscaled margin.
+        report = compute_dsm(
             q=q,
             qd=qd,
             q_v=self._q_v,
@@ -160,10 +168,9 @@ class CERG:
             constraints=self._constraints,
             config=cfg,
         )
+        dsm = report.value * self._dsm_scale
         self._last_dsm = dsm
-        self._last_dsm_breakdown = breakdown
-        # if np.all(dsm * rho * cfg.erg_dt == 0):
-        #     breakpoint()
+        self._last_dsm_report = report
         # 3. ODE Euler step: dq_v/dt = DSM * rho
         self._q_v = self._q_v + dsm * rho * cfg.erg_dt
 

@@ -208,47 +208,35 @@ _DSM_FMT_HEADER_PRINTED = False  # one-time hint line
 
 def _print_negative_dsm(
     t: float,
-    breakdown: dict | None,
+    report,                          # DSMReport | None
     joint_names: list[str],
     body_names: list[str],
 ) -> None:
-    """Print a one-line diagnostic per component whose value < 0.
+    """Print a one-line diagnostic per ACTIVE (margin < 0) contribution.
 
-    Silent when every component is non-negative.  Identifies which
-    prediction step + joint/body produced each violation.
+    Silent when nothing is violated.  Reads phoebe's structured DSMReport:
+    ``report.active`` is every DSMContribution whose predicted margin went
+    negative, each tagged with kind/side/joint/body/step.
     """
-    if not breakdown:
-        return
-    # Quick scan for any negative; bail out if none — keeps the hot path cheap.
-    if not any(c["value"] < 0.0 for c in breakdown.values()):
+    if report is None or not report.active:
         return
 
     global _DSM_FMT_HEADER_PRINTED
     if not _DSM_FMT_HEADER_PRINTED:
-        print("  [DSM<0]  format: type=value @ pred step k, where (joint/body, side)")
+        print("  [DSM<0]  format: kind=margin @ pred step k, where (joint/body, side)")
         _DSM_FMT_HEADER_PRINTED = True
 
-    for name, comp in breakdown.items():
-        v = comp["value"]
-        if v >= 0.0:
-            continue
-        info = comp.get("info", {}) or {}
-        if name in ("tau", "q", "dq"):
-            ji = info.get("joint_idx", -1)
-            jname = joint_names[ji] if 0 <= ji < len(joint_names) else f"j{ji}"
-            side = info.get("side", "?")
-            print(f"  [t={t:6.3f}s]  {name:>6s}={v:+.4f} @ pred step {info.get('step', -1):>3d}  "
-                  f"({jname}, {side})")
-        elif name in ("soft", "hard"):
-            bi = info.get("body_idx", -1)
-            bname = body_names[bi] if 0 <= bi < len(body_names) else f"b{bi}"
-            ci = info.get("constraint_idx", -1)
-            print(f"  [t={t:6.3f}s]  {name:>6s}={v:+.4f} @ pred step {info.get('step', -1):>3d}  "
-                  f"({bname}, constraint #{ci})")
-        elif name == "energy":
-            winner = info.get("winner", "?")
-            print(f"  [t={t:6.3f}s]  {name:>6s}={v:+.4f}  "
-                  f"(winning term: {winner}; energy_margin={info.get('energy_margin', 0):.4f})")
+    for c in report.active:
+        if c.joint >= 0:
+            jname = joint_names[c.joint] if 0 <= c.joint < len(joint_names) else f"j{c.joint}"
+            print(f"  [t={t:6.3f}s]  {c.kind:>8s}={c.margin:+.4f} @ pred step {c.step:>3d}  "
+                  f"({jname}, {c.side})")
+        elif c.body >= 0:
+            bname = body_names[c.body] if 0 <= c.body < len(body_names) else f"b{c.body}"
+            print(f"  [t={t:6.3f}s]  {c.kind:>8s}={c.margin:+.4f} @ pred step {c.step:>3d}  "
+                  f"({bname}, '{c.name}')")
+        else:
+            print(f"  [t={t:6.3f}s]  {c.kind:>8s}={c.margin:+.4f}")
 
 
 # ─── Pink-IK setup ────────────────────────────────────────────────────── #
@@ -655,7 +643,7 @@ def main() -> None:
             # the offending DSM type + worst-case prediction step + joint/body.
             _print_negative_dsm(
                 t=d.time,
-                breakdown=cerg_right.last_dsm_breakdown,
+                report=cerg_right.last_dsm_report,
                 joint_names=RIGHT_ARM_JOINT_NAMES,
                 body_names=right_arm_body_names,
             )
