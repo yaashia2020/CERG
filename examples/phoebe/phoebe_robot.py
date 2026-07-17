@@ -62,6 +62,17 @@ _ARM_LINKS_TEMPLATE = [
     "wrist_3_link",
 ]
 
+# Rigid, ~massless collision points welded to wrist_3 in the MJCF, approximating
+# the Robotiq 2F-85. Included in body_names so the DSM / navigation field check
+# the gripper (the furthest-out part of the arm) against half-space constraints.
+# They add no DOF (nv stays 6) — see the <body> blocks in phoebe_{left,right}_arm.xml.
+_GRIPPER_POINTS_TEMPLATE = [
+    "gripper_base",
+    "gripper_grasp",
+    "gripper_left_fingertip",
+    "gripper_right_fingertip",
+]
+
 
 class _PhoebeArmRobot(RobotModel):
     """Base class for a single Phoebe UR5e arm."""
@@ -101,7 +112,10 @@ class _PhoebeArmRobot(RobotModel):
 
     @property
     def body_names(self) -> list[str]:
-        return [self._prefix + link for link in _ARM_LINKS_TEMPLATE]
+        return [
+            self._prefix + link
+            for link in _ARM_LINKS_TEMPLATE + _GRIPPER_POINTS_TEMPLATE
+        ]
 
     @property
     def end_effectors(self) -> list[str]:

@@ -1,9 +1,12 @@
-"""Scene configuration: per joint set, initial state + target.
+"""Scene configuration: per joint set, initial state + target + constraints.
 
 A "scene" is one experimental scenario: where each joint set starts, where
-it should go. Tuning (Kp, Kd, prediction horizon, DSM kappas) lives in
-CERGConfig; environment constraints (walls, energy limits) live in the
-constraints yaml. Scenes are the third leg.
+it should go (a single target or a timed schedule of targets), and which
+environment constraints apply to it. Tuning (Kp, Kd,
+prediction horizon, DSM kappas) lives in CERGConfig. A standalone constraints
+yaml (load_constraints) still works for shared/global constraints; the
+per-set `constraints:` block here is for scenario-specific geometry so one
+scene file fully describes one experiment.
 
 The yaml lists joint_names per set so a human editing the file is never
 relying on invisible positional convention. The loader takes the consumer's
@@ -26,11 +29,13 @@ Usage:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Sequence
 
 import numpy as np
+
+from cerg.core.cerg.constraints import Constraint, build_constraint
 
 
 @dataclass(frozen=True)
@@ -39,7 +44,16 @@ class JointSetScene:
 
     q0: np.ndarray
     qd0: np.ndarray
+    # First scheduled target — kept as a plain array so single-target
+    # consumers keep working; the full timed schedule (if any) lives in
+    # q_target_schedule, of which q_target is always entry 0's q.
     q_target: np.ndarray
+    # Scenario-specific environment constraints for THIS joint set (may be
+    # empty). Built from the optional per-set `constraints:` yaml block.
+    constraints: list[Constraint] = field(default_factory=list)
+    # Timed target schedule: (t, q) pairs, t in seconds from scenario start,
+    # strictly increasing. A flat `q_target:` yaml collapses to [(0.0, q)].
+    q_target_schedule: list[tuple[float, np.ndarray]] = field(default_factory=list)
 
     @property
     def nq(self) -> int:
@@ -59,6 +73,17 @@ def load_scene_config(
           q0:       [0, 0, 0, 0, 0, 0]
           qd0:      [0, 0, 0, 0, 0, 0]    # optional, defaults to zeros
           q_target: [8, -8, 5, -8, 8, 8]
+          # q_target may instead be a timed schedule — the target switches to
+          # each q at its t (seconds from scenario start, strictly increasing):
+          # q_target:
+          #   - {t: 0.0, q: [8, -8, 5, -8, 8, 8]}
+          #   - {t: 4.0, q: [2, -6, 3, -7, 6, 5]}
+          constraints:                     # optional, defaults to none
+            - name: table
+              type: half_space
+              normal: [0, 0, -1]           # safe side: n.p <= offset
+              offset: -0.40                # i.e. z >= 0.40
+              kind: soft                   # soft | hard
 
         right_arm:
           joint_names: [...]
@@ -141,16 +166,81 @@ def _parse_set(
 
     if "q_target" not in entry:
         raise ValueError(f"{where}.q_target: required")
-    qt_yaml = _to_array(entry["q_target"], nq, f"{where}.q_target")
+    schedule_yaml = _parse_target_schedule(entry["q_target"], nq, f"{where}.q_target")
+
+    constraints = _parse_constraints(entry.get("constraints", []),
+                                     set_name, f"{where}.constraints")
 
     # Reorder yaml arrays from yaml_names order to want_order.
     yaml_idx = {n: i for i, n in enumerate(yaml_names)}
     perm = [yaml_idx[n] for n in want_order]
+    schedule = [(t, q[perm]) for t, q in schedule_yaml]
     return JointSetScene(
         q0=q0_yaml[perm],
         qd0=qd0_yaml[perm],
-        q_target=qt_yaml[perm],
+        q_target=schedule[0][1],
+        constraints=constraints,
+        q_target_schedule=schedule,
     )
+
+
+def _parse_target_schedule(
+    raw: object, nq: int, where: str
+) -> list[tuple[float, np.ndarray]]:
+    """Parse `q_target` in either form into a non-empty [(t, q), ...] list.
+
+    Flat form   `q_target: [8, -8, ...]`            -> [(0.0, q)]
+    Timed form  `q_target: [{t: 0, q: [...]}, ...]` -> [(t0, q0), (t1, q1), ...]
+                with t >= 0 and strictly increasing.
+    """
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(f"{where}: must be a non-empty list")
+
+    if not isinstance(raw[0], dict):
+        # Flat form: one target, active from t=0.
+        return [(0.0, _to_array(raw, nq, where))]
+
+    schedule: list[tuple[float, np.ndarray]] = []
+    for i, wp in enumerate(raw):
+        wp_where = f"{where}[{i}]"
+        if not isinstance(wp, dict):
+            raise ValueError(f"{wp_where}: mixed forms — expected a {{t, q}} mapping")
+        extra = set(wp.keys()) - {"t", "q"}
+        if extra:
+            raise ValueError(f"{wp_where}: unknown keys {sorted(extra)} (expected t, q)")
+        if "t" not in wp or "q" not in wp:
+            raise ValueError(f"{wp_where}: both 't' and 'q' are required")
+        try:
+            t = float(wp["t"])
+        except (TypeError, ValueError):
+            raise ValueError(f"{wp_where}.t: must be a number, got {wp['t']!r}") from None
+        if not np.isfinite(t) or t < 0:
+            raise ValueError(f"{wp_where}.t: must be finite and >= 0, got {t}")
+        if schedule and t <= schedule[-1][0]:
+            raise ValueError(
+                f"{wp_where}.t: times must be strictly increasing "
+                f"({t} follows {schedule[-1][0]})"
+            )
+        schedule.append((t, _to_array(wp["q"], nq, f"{wp_where}.q")))
+    return schedule
+
+
+def _parse_constraints(entries: object, set_name: str, where: str) -> list[Constraint]:
+    """Build the optional per-set constraint list from its yaml block."""
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        raise ValueError(f"{where}: must be a list of constraint mappings")
+    out: list[Constraint] = []
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise ValueError(f"{where}[{i}]: must be a mapping, got {type(entry).__name__}")
+        name = str(entry.get("name", f"{set_name}_c{i}"))
+        try:
+            out.append(build_constraint(entry, name))
+        except (KeyError, ValueError) as e:
+            raise ValueError(f"{where}[{i}] ('{name}'): {e}") from e
+    return out
 
 
 def _to_array(values: object, expected_n: int, where: str) -> np.ndarray:

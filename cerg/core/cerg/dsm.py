@@ -103,6 +103,9 @@ class DSMReport:
     value: float
     binding: DSMContribution | None = None
     active: list[DSMContribution] = field(default_factory=list)
+    # Mechanical energy at t=0 of the prediction (0.5*qd'M qd + 0.5*e'Kp e).
+    # Only populated by compute_dsm; sub-report helpers leave it 0.
+    energy: float = 0.0
 
 
 def predict_trajectory(
@@ -143,6 +146,7 @@ def predict_trajectory(
 
     # Energy at t=0: E = 0.5*qd^T*M*qd + 0.5*(q_v - q)^T*Kp*(q_v - q)
     M0 = simulator.get_mass_matrix(q)
+
     kinetic = 0.5 * qd.T @ M0 @ qd
     pos_err = q_v[:nv] - q[:nv]
     potential = 0.5 * pos_err.T @ np.diag(Kp) @ pos_err
@@ -162,10 +166,10 @@ def predict_trajectory(
         g = simulator.get_gravity_vector(q)
 
         tau = Kp * (q_v[:nv] - q[:nv]) - Kd * qd[:nv] + g[:nv]
-
+        
         rhs = tau - c - g
         qdd = np.linalg.solve(M, rhs)
-
+        # print("qdd at step {}: {}".format(k, qdd))
         qd = qd + qdd * pred_dt
         q = q + qd * pred_dt
 
@@ -421,4 +425,5 @@ def compute_dsm(
     for r in (d_tau, d_q, d_dq, d_soft, d_hard, d_energy):
         active.extend(r.active)
 
-    return DSMReport(value=value, binding=binding, active=active)
+    return DSMReport(value=value, binding=binding, active=active,
+                     energy=float(pred.energy))

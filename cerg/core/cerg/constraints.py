@@ -111,6 +111,19 @@ class HalfSpaceConstraint(Constraint):
 # -------------------------------------------------------------------- #
 
 
+def build_constraint(entry: dict, name: str = "") -> Constraint:
+    """Build one Constraint from a yaml-style dict entry.
+
+    Shared by load_constraints (environment files) and the scene loader
+    (per-joint-set `constraints:` blocks in scene yamls).
+    """
+    ctype = str(entry.get("type", "")).lower()
+    builder = _BUILDERS.get(ctype)
+    if builder is None:
+        raise ValueError(f"Unknown constraint type '{ctype}'. Available: {list(_BUILDERS)}")
+    return builder(entry, name or str(entry.get("name", "")))
+
+
 def load_constraints(path: str | Path) -> dict[str, Constraint]:
     """Load constraints from a YAML environment file.
 
@@ -143,18 +156,10 @@ def load_constraints(path: str | Path) -> dict[str, Constraint]:
     with open(path) as f:
         data = yaml.safe_load(f)
 
-    _BUILDERS = {
-        "half_space": _build_half_space,
-    }
-
     constraints: dict[str, Constraint] = {}
     for i, entry in enumerate(data.get("constraints", [])):
-        ctype = entry.get("type", "").lower()
-        builder = _BUILDERS.get(ctype)
-        if builder is None:
-            raise ValueError(f"Unknown constraint type '{ctype}'. Available: {list(_BUILDERS)}")
         name = entry.get("name", str(i))
-        constraints[name] = builder(entry, name)
+        constraints[name] = build_constraint(entry, name)
 
     return constraints
 
@@ -166,3 +171,9 @@ def _build_half_space(entry: dict, name: str) -> HalfSpaceConstraint:
         kind=entry.get("kind", "soft"),
         name=name,
     )
+
+
+# type tag (yaml `type:` field) -> builder. Future: sphere, cylinder, ...
+_BUILDERS = {
+    "half_space": _build_half_space,
+}
