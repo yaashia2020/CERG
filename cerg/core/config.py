@@ -31,7 +31,8 @@ class CERGConfig:
         "eta", "zeta_q", "delta_q", "delta_s", "fd", "zeta_w", "delta_w",
         "robust_delta_tau", "robust_delta_q", "robust_delta_dq",
         "kappa_tau", "kappa_q", "kappa_dq", "kappa_soft", "kappa_hard", "kappa_energy",
-        "E_max",
+        "kappa_delta_s", "delta_i",
+        "E_max", "E_min",
     }
     _REQUIRED = {"Kp", "Kd"}
 
@@ -54,7 +55,8 @@ class CERGConfig:
             "robust_delta_tau": 0.0, "robust_delta_q": 0.0, "robust_delta_dq": 0.0,
             "kappa_tau": 1.0, "kappa_q": 1.0, "kappa_dq": 1.0,
             "kappa_soft": 1.0, "kappa_hard": 1.0, "kappa_energy": 1.0,
-            "E_max": 0.5
+            "kappa_delta_s": 1.0, "delta_i": 0.01,
+            "E_max": 0.5, "E_min": 0.0,
         }
         for key in self._FLOAT_FIELDS:
             setattr(self, key, float(kwargs.get(key, _defaults[key])))

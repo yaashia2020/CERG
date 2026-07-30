@@ -357,20 +357,30 @@ class TestCERGClosedLoop:
             f"Tip x={tip_pos[0]:.3f} exceeded wall at x={wall_x}"
         )
 
-    def test_with_soft_constraint(self, sim, robot, config, controller):
-        """Soft constraint: whenever any body crosses x=0.7, energy must be < E_max.
+    def test_soft_constraint_no_min_energy(self, sim, robot, config, controller):
+        """Soft constraint with the dynamic delta_s DISABLED (baseline behaviour):
+        whenever any body crosses x=0.7, energy must be < E_max.
+
+        The dynamic delta_s mechanism is turned off by setting kappa_delta_s=0
+        (never grows) and delta_i = config.delta_s (init matches the static
+        value). This test exercises the classic soft-constraint invariant only.
 
         Same geometry as the Drake version:
           q0 = [pi/2, 0, 0] — arm pointing up, all bodies at x≈0 (safe).
           q_r = [0, 0, 0]   — arm along +X: tip at x≈0.9, beyond wall x=0.7.
         """
+        import copy
+        static_config = copy.deepcopy(config)
+        static_config.kappa_delta_s = 0.0
+        static_config.delta_i = config.delta_s
+
         wall_x = 0.7
         wall = HalfSpaceConstraint(
             normal=np.array([1.0, 0.0, 0.0]),
             offset=wall_x,
             kind="soft",
         )
-        cerg = CERG(sim, robot, constraints=[wall], config=config)
+        cerg = CERG(sim, robot, constraints=[wall], config=static_config)
 
         q0 = np.array([np.pi / 2, 0.0, 0.0])   # arm up: tip at x≈0
         q_r = np.array([0.0, 0.0, 0.0])          # arm extended: tip at x≈0.9
@@ -388,7 +398,7 @@ class TestCERGClosedLoop:
         sim.reset(q0=q0)
         cerg.reset(q0.copy())
 
-        Kp = np.broadcast_to(np.asarray(config.Kp, dtype=float), (robot.nv,))
+        Kp = np.broadcast_to(np.asarray(static_config.Kp, dtype=float), (robot.nv,))
         violations = []   # (body_name, signed_dist, energy) when boundary is crossed
 
         for _ in range(7000):
@@ -411,9 +421,9 @@ class TestCERGClosedLoop:
 
         # Soft-constraint invariant: any boundary crossing must have E < E_max
         for body_name, d, energy in violations:
-            assert energy < config.E_max, (
+            assert energy < static_config.E_max, (
                 f"Body '{body_name}' violated constraint (d={d:.4f}) "
-                f"but energy {energy:.4f} >= E_max={config.E_max:.4f}"
+                f"but energy {energy:.4f} >= E_max={static_config.E_max:.4f}"
             )
 
     def test_qv_never_jumps(self, sim, robot, config, controller):
@@ -459,3 +469,104 @@ class TestCERGClosedLoop:
 
         assert all(d >= 0.0 for d in dsm_values), "DSM went negative"
         assert dsm_values[0] > 0.0, "Initial DSM should be positive"
+
+
+# ------------------------------------------------------------------ #
+#  E_min physical test (floor + wall + tip-sphere scene)              #
+# ------------------------------------------------------------------ #
+
+
+class TestEMinPhysical:
+    """E_min mechanism against a PHYSICAL wall (scene_floor.xml).
+
+    The arm starts behind the wall; q_r reaches past it. The wall pins the
+    arm; q_v (a reference) advances past the wall as delta_s grows while
+    E < E_min, building sustained spring energy — a press with E inside
+    [E_min, E_max] at steady state.
+    """
+
+    E_MIN = 0.5           # feasible for q_r = [0,0,0] (r = 0.5)
+    N_STEPS = 8000        # 8 s
+    TAIL = 2000           # steady-state window = last 2 s
+    WALL_X = 0.4
+
+    def test_press_reaches_energy_band(self):
+        import mujoco
+        from tests.conftest import RRRWithFloor
+
+        robot = RRRWithFloor()
+        sim = MuJoCoSimulator(robot, dt=1e-3)
+        config = CERGConfig.from_yaml("configs/rrr_default.yaml")
+        import copy as _copy
+        cfg = _copy.deepcopy(config)
+        cfg.E_min = self.E_MIN
+        cfg.kappa_delta_s = 1.0
+        cfg.delta_i = 0.01
+        controller = PDController.from_config(cfg, sim)
+
+        wall = HalfSpaceConstraint(
+            normal=np.array([1.0, 0.0, 0.0]), offset=self.WALL_X, kind="soft",
+        )
+        cerg = CERG(sim, robot, constraints=[wall], config=cfg)
+
+        q0 = np.array([-1.3, 0.3, 0.2])   # behind the wall, above the floor
+        q_r = np.array([0.0, 0.0, 0.0])   # tip x = 0.9 -> r = 0.5 past the wall
+
+        assert sim.get_all_body_positions(robot.body_names, q=q0)[0].max() < self.WALL_X
+
+        sim.reset(q0=q0)
+        cerg.reset(q0.copy())
+
+        tip_gid = mujoco.mj_name2id(sim.mj_model, mujoco.mjtObj.mjOBJ_GEOM, "tip_sphere")
+
+        E_hist = np.zeros(self.N_STEPS)
+        ds_hist = np.zeros(self.N_STEPS)
+        tip_hist = np.zeros(self.N_STEPS)
+        contact = np.zeros(self.N_STEPS, dtype=bool)
+
+        for k in range(self.N_STEPS):
+            state = sim.get_state()
+            q_v = cerg.step(state.q, state.qd, q_r)
+            E_hist[k] = cerg.last_energy
+            ds_hist[k] = cerg.delta_s[0]
+            tip_hist[k] = sim.get_body_position("tip", q=state.q)[0]
+            sim.step(controller.compute(state, q_v))
+            d = sim.mj_data
+            for c in range(d.ncon):
+                if tip_gid in (d.contact.geom[c, 0], d.contact.geom[c, 1]):
+                    contact[k] = True
+                    break
+
+        tail = slice(-self.TAIL, None)
+
+        # 1. the wall physically stops the tip (sphere r=0.02, face at 0.395)
+        assert tip_hist.max() <= self.WALL_X + 0.005, (
+            f"tip crossed the wall: max x = {tip_hist.max():.4f}"
+        )
+
+        # 2. steady-state press energy inside the band
+        e_tail = E_hist[tail]
+        assert e_tail.mean() >= self.E_MIN, (
+            f"steady-state E {e_tail.mean():.3f} < E_min {self.E_MIN}"
+        )
+        assert e_tail.max() <= cfg.E_max + 0.05, (
+            f"steady-state E {e_tail.max():.3f} exceeded E_max {cfg.E_max}"
+        )
+
+        # 3. sustained press: tip pinned at the wall-touch position through the
+        #    whole steady-state window (wall face 0.395 - sphere r 0.02 = 0.375),
+        #    with contact registered on at least some frames. (At equilibrium
+        #    penetration ~0, so MuJoCo's contact list flickers — position is
+        #    the reliable signal, ncon the corroborating one.)
+        press_x = self.WALL_X - 0.005 - 0.02      # wall half-thickness, sphere radius
+        tip_tail = tip_hist[tail]
+        assert np.all(np.abs(tip_tail - press_x) < 0.002), (
+            f"tip not pinned at the wall: tail x in [{tip_tail.min():.4f}, {tip_tail.max():.4f}], "
+            f"expected ~{press_x:.4f}"
+        )
+        assert contact[tail].any(), "no tip contact registered in the steady-state window"
+
+        # 4. delta_s: starts near delta_i, monotone non-decreasing
+        assert ds_hist[0] >= cfg.delta_i - 1e-12
+        assert ds_hist[0] < cfg.delta_i + 0.05
+        assert np.all(np.diff(ds_hist) >= -1e-12), "delta_s must never decrease"

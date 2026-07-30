@@ -1,0 +1,27 @@
+<mujoco model="rrr">
+  <compiler angle="radian"/>
+
+  <option timestep="0.001"/>
+
+  <worldbody>
+    <body name="base_link">
+      <inertial pos="0 0 0" mass="1" diaginertia="0.001 0.001 0.001"/>
+      <body name="link1" pos="0 0 0.05">
+        <inertial pos="0.2 0 0" quat="0.5 0.5 0.5 0.5" mass="2" diaginertia="0.028 0.028 0.001"/>
+        <joint name="joint1" pos="0 0 0" axis="0 1 0" range="-3.14159 3.14159" actuatorfrcrange="-50 50" damping="0.1"/>
+        <geom size="0.03 0.2" pos="0.2 0 0" quat="0.707105 0 0.707108 0" type="cylinder" rgba="0.2 0.4 0.8 1"/>
+        <body name="link2" pos="0.4 0 0">
+          <inertial pos="0.15 0 0" quat="0.5 0.5 0.5 0.5" mass="1.5" diaginertia="0.012 0.012 0.001"/>
+          <joint name="joint2" pos="0 0 0" axis="0 0 1" range="-3.14159 3.14159" actuatorfrcrange="-30 30" damping="0.1"/>
+          <geom size="0.025 0.15" pos="0.15 0 0" quat="0.707105 0 0.707108 0" type="cylinder" rgba="0.2 0.4 0.8 1"/>
+          <body name="link3" pos="0.3 0 0">
+            <inertial pos="0.1 0 0" quat="0.5 0.5 0.5 0.5" mass="1" diaginertia="0.03 0.03 0.002"/>
+            <joint name="joint3" pos="0 0 0" axis="0 0 1" range="-3.14159 3.14159" actuatorfrcrange="-20 20" damping="0.1"/>
+            <geom size="0.02 0.1" pos="0.1 0 0" quat="0.707105 0 0.707108 0" type="cylinder" rgba="0.2 0.4 0.8 1"/>
+            <body name="tip" pos="0.2 0 0"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

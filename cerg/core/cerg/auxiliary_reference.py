@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 
 from cerg.core.cerg.constraints import Constraint
-from cerg.core.cerg.dsm import compute_dsm
+from cerg.core.cerg.dsm import DSMReport, compute_dsm
 from cerg.core.cerg.navigation_field import compute_navigation_field
 from cerg.core.config import CERGConfig
 from cerg.core.robot import RobotModel
@@ -56,12 +56,26 @@ class CERG:
         self._constraints = constraints or []
         self._config = config or CERGConfig()
 
+        # Indices (into self._constraints) of soft constraints; order matches
+        # the sublist passed to compute_navigation_field, so the per-constraint
+        # delta_s list stays aligned.
+        self._soft_indices: list[int] = [
+            i for i, c in enumerate(self._constraints) if c.kind == "soft"
+        ]
+
         # State
         self._q_v: np.ndarray | None = None
 
+        # Per-soft-constraint delta_s (dynamic; monotonically grows when E < E_min,
+        # capped by the world-frame signed distance of fk(q_r, tip) to that
+        # constraint). Order matches self._soft_indices.
+        self._delta_s: list[float] = []
+
         # Last computed values (for logging / debugging)
         self._last_dsm: float = 0.0
+        self._last_dsm_report: DSMReport | None = None
         self._last_rho: np.ndarray | None = None
+        self._last_energy: float = 0.0
 
     @property
     def config(self) -> CERGConfig:
@@ -88,8 +102,11 @@ class CERG:
                         )
 
         self._q_v = q_v0
+        self._delta_s = [self._config.delta_i for _ in self._soft_indices]
         self._last_dsm = 0.0
+        self._last_dsm_report = None
         self._last_rho = None
+        self._last_energy = 0.0
 
     @property
     def q_v(self) -> np.ndarray:
@@ -104,9 +121,32 @@ class CERG:
         return self._last_dsm
 
     @property
+    def last_dsm_report(self) -> DSMReport | None:
+        """Full DSMReport from the last step() call.
+
+        None before the first step (and after reset). Holds the binding
+        contribution and the full list of active (violating) contributions —
+        useful for telemetry without recomputing ``compute_dsm`` externally.
+        Note ``.value`` is the unscaled aggregate; ``last_dsm`` applies the
+        0.45 debug scale.
+        """
+        return self._last_dsm_report
+
+    @property
     def last_rho(self) -> np.ndarray | None:
         """Last computed navigation field (for debugging / logging)."""
         return self._last_rho.copy() if self._last_rho is not None else None
+
+    @property
+    def last_energy(self) -> float:
+        """Total energy E = 0.5 qd^T M qd + 0.5 (q_v-q)^T Kp (q_v-q) at the
+        last step, computed the same way as dsm.predict_trajectory."""
+        return self._last_energy
+
+    @property
+    def delta_s(self) -> list[float]:
+        """Current per-soft-constraint delta_s values (in soft-constraint order)."""
+        return list(self._delta_s)
 
     def step(self, q: np.ndarray, qd: np.ndarray, q_r: np.ndarray) -> np.ndarray:
         """Compute one ERG step: update q_v and return it.
@@ -125,6 +165,31 @@ class CERG:
             raise RuntimeError("ERG not initialized. Call reset(q_v0) first.")
 
         cfg = self._config
+        nv = self._robot.nv
+
+        # 0. Current energy (same formula as dsm.predict_trajectory):
+        #    E = 0.5 qd^T M(q) qd  +  0.5 (q_v - q)^T diag(Kp) (q_v - q)
+        M = self._sim.get_mass_matrix(q)
+        Kp = np.broadcast_to(np.asarray(cfg.Kp, dtype=float), (nv,))
+        pos_err = self._q_v[:nv] - q[:nv]
+        energy = float(0.5 * qd[:nv] @ M @ qd[:nv] + 0.5 * pos_err @ np.diag(Kp) @ pos_err)
+        self._last_energy = energy
+
+        # 0b. Per-soft-constraint delta_s evolution:
+        #        d(delta_s)/dt = kappa_delta_s * max(E_min - E, 0)     (monotone ↑)
+        #     capped by r = signed_distance(fk(q_r, tip), constraint)  (per constraint)
+        if self._soft_indices:
+            deficit = max(cfg.E_min - energy, 0.0)
+            delta_grow = cfg.kappa_delta_s * deficit * cfg.erg_dt
+            tip = self._robot.end_effectors[0]
+            tip_at_qr = self._sim.get_all_body_positions([tip], q=q_r)[:, 0]
+            for k, ci in enumerate(self._soft_indices):
+                self._delta_s[k] += delta_grow
+                # CAP DISABLED (per current experiments). When enabled it bounds
+                # delta_s to [delta_i, r], r = |dist(fk(tip, q_r), plane)|:
+                # r_k = abs(float(self._constraints[ci].signed_distance(tip_at_qr)))
+                # self._delta_s[k] = max(cfg.delta_i, min(self._delta_s[k], r_k))
+                _ = ci
 
         # 1. Navigation field (direction)
         rho = compute_navigation_field(
@@ -134,11 +199,12 @@ class CERG:
             robot=self._robot,
             constraints=self._constraints,
             config=cfg,
+            delta_s_soft=self._delta_s if self._soft_indices else None,
         )
         self._last_rho = rho
 
         # 2. Dynamic Safety Margin (speed)
-        dsm = compute_dsm(
+        report = compute_dsm(
             q=q,
             qd=qd,
             q_v=self._q_v,
@@ -147,9 +213,10 @@ class CERG:
             constraints=self._constraints,
             config=cfg,
         )
+        # 0.45 scale preserved from the pre-report compute_dsm (debug state)
+        dsm = 0.45 * report.value
         self._last_dsm = dsm
-        # if np.all(dsm * rho * cfg.erg_dt == 0):
-        #     breakpoint()
+        self._last_dsm_report = report
         # 3. ODE Euler step: dq_v/dt = DSM * rho
         self._q_v = self._q_v + dsm * rho * cfg.erg_dt
 
