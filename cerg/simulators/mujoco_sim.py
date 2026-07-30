@@ -84,6 +84,9 @@ class MuJoCoSimulator(Simulator):
             f"MuJoCo model nv={self._model.nv} != robot nv={robot.nv}"
         )
 
+        if robot.armature is not None:
+            self._model.dof_armature[:robot.nv] = robot.armature
+
     @property
     def mj_model(self) -> mujoco.MjModel:
         return self._model

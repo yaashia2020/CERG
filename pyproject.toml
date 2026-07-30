@@ -16,7 +16,8 @@ dependencies = [
 [project.optional-dependencies]
 drake = ["drake"]
 mujoco = ["mujoco>=3.0"]
-all = ["drake", "mujoco>=3.0"]
+phoebe = ["pyroboplan"]
+all = ["drake", "mujoco>=3.0", "pyroboplan"]
 dev = ["pytest", "pytest-cov", "ruff"]
 
 [tool.setuptools.packages.find]

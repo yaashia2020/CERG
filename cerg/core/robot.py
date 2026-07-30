@@ -5,8 +5,16 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from cerg.core.simulator import Simulator
+
+
+class Q0ValidationError(ValueError):
+    """Raised when an initial configuration q0 fails RobotModel.validate_q0."""
 
 
 @dataclass
@@ -104,7 +112,39 @@ class RobotModel(ABC):
     def qd_max(self) -> np.ndarray:
         return np.array([j.max_velocity for j in self.joints])
 
+    @property
+    def armature(self) -> np.ndarray | None:
+        """Reflected actuator inertia per joint (kg·m²). None means use URDF/MJCF value."""
+        return None
+
     def random_configuration(self, rng: np.random.Generator | None = None) -> np.ndarray:
         """Sample a uniformly random configuration within joint limits."""
         rng = rng or np.random.default_rng()
         return rng.uniform(self.q_lower, self.q_upper)
+
+    def validate_q0(self, q0: np.ndarray, sim: "Simulator | None" = None) -> None:
+        """Raise Q0ValidationError if q0 is not a valid initial configuration.
+
+        Default implementation checks joint position limits only. Subclasses
+        may override to add robot-specific checks (e.g. singularity
+        avoidance) and should call ``super().validate_q0(q0, sim)`` to keep
+        the limit check. ``sim`` is accepted so overrides can compute
+        Jacobians via ``sim.get_translational_jacobian`` etc., but the
+        default check ignores it.
+        """
+        q0 = np.asarray(q0, dtype=float)
+        if q0.shape != (self.nq,):
+            raise Q0ValidationError(
+                f"q0 shape {q0.shape} does not match robot.nq={self.nq}"
+            )
+        problems: list[str] = []
+        for i, j in enumerate(self.joints):
+            if q0[i] < j.lower or q0[i] > j.upper:
+                problems.append(
+                    f"  {j.name}: q0={q0[i]:+.4f} outside "
+                    f"[{j.lower:+.4f}, {j.upper:+.4f}]"
+                )
+        if problems:
+            raise Q0ValidationError(
+                "q0 violates joint limits:\n" + "\n".join(problems)
+            )

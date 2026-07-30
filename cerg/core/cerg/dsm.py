@@ -103,6 +103,9 @@ class DSMReport:
     value: float
     binding: DSMContribution | None = None
     active: list[DSMContribution] = field(default_factory=list)
+    # Mechanical energy at t=0 of the prediction (0.5*qd'M qd + 0.5*e'Kp e).
+    # Only populated by compute_dsm; sub-report helpers leave it 0.
+    energy: float = 0.0
 
 
 def predict_trajectory(
@@ -143,6 +146,7 @@ def predict_trajectory(
 
     # Energy at t=0: E = 0.5*qd^T*M*qd + 0.5*(q_v - q)^T*Kp*(q_v - q)
     M0 = simulator.get_mass_matrix(q)
+
     kinetic = 0.5 * qd.T @ M0 @ qd
     pos_err = q_v[:nv] - q[:nv]
     potential = 0.5 * pos_err.T @ np.diag(Kp) @ pos_err
@@ -228,11 +232,16 @@ def _constraint_report(
     pred: PredictionResult,
     constraints: list[Constraint],
     kappa: float,
+    body_names: list[str] | None = None,
 ) -> DSMReport:
     """Build a DSMReport for body-vs-environment-constraint distance.
 
     For each (body, constraint) pair, finds the worst signed distance over
     the horizon and the step index. `active` is any pair whose margin is < 0.
+
+    `body_names` names the rows of pred.body_pos (robot.body_names order);
+    it is required for constraints with a `body_filter` to take effect —
+    without it a filtered constraint falls back to checking every body.
     """
     if not constraints:
         return DSMReport(value=float("inf"), binding=None, active=[])
@@ -242,7 +251,11 @@ def _constraint_report(
     num_steps_inclusive = pred.body_pos.shape[2]
 
     for c_idx, constraint in enumerate(constraints):
+        allowed = getattr(constraint, "body_filter", None)
         for b in range(num_bodies):
+            if (allowed is not None and body_names is not None
+                    and body_names[b] not in allowed):
+                continue
             # Distance from this body at every horizon step.
             dists = np.array([
                 constraint.signed_distance(pred.body_pos[b, :, k])
@@ -330,20 +343,22 @@ def dsm_soft(
     pred: PredictionResult,
     constraints: list[Constraint],
     kappa: float,
+    body_names: list[str] | None = None,
 ) -> DSMReport:
     """DSM for soft constraints (coupled with energy in compute_dsm)."""
     soft = [c for c in constraints if c.kind == "soft"]
-    return _constraint_report("soft", pred, soft, kappa)
+    return _constraint_report("soft", pred, soft, kappa, body_names)
 
 
 def dsm_hard(
     pred: PredictionResult,
     constraints: list[Constraint],
     kappa: float,
+    body_names: list[str] | None = None,
 ) -> DSMReport:
     """DSM for hard constraints (standalone — DSM clamps to 0 on violation)."""
     hard = [c for c in constraints if c.kind == "hard"]
-    return _constraint_report("hard", pred, hard, kappa)
+    return _constraint_report("hard", pred, hard, kappa, body_names)
 
 
 def dsm_energy(
@@ -399,8 +414,8 @@ def compute_dsm(
     d_tau    = dsm_torque  (pred, robot.tau_max,                 nv, config.robust_delta_tau, config.kappa_tau)
     d_q      = dsm_position(pred, robot.q_lower, robot.q_upper,  nv, config.robust_delta_q,   config.kappa_q)
     d_dq     = dsm_velocity(pred, qd_limits,                     nv, config.robust_delta_dq,  config.kappa_dq)
-    d_soft   = dsm_soft    (pred, constraints, config.kappa_soft)
-    d_hard   = dsm_hard    (pred, constraints, config.kappa_hard)
+    d_soft   = dsm_soft    (pred, constraints, config.kappa_soft, robot.body_names)
+    d_hard   = dsm_hard    (pred, constraints, config.kappa_hard, robot.body_names)
     d_energy = dsm_energy  (pred.energy, config.E_max, d_soft.value,
                             kappa_s=1.0, kappa_energy=config.kappa_energy)
 
@@ -421,4 +436,5 @@ def compute_dsm(
     for r in (d_tau, d_q, d_dq, d_soft, d_hard, d_energy):
         active.extend(r.active)
 
-    return DSMReport(value=value, binding=binding, active=active)
+    return DSMReport(value=value, binding=binding, active=active,
+                     energy=float(pred.energy))

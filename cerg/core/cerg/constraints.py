@@ -29,6 +29,15 @@ class Constraint(ABC):
     """Base class for environment constraints."""
 
     kind: ConstraintKind
+    name: str
+
+    #: Optional per-constraint body filter: a set/frozenset of robot body
+    #: names this constraint applies to. None (default) = every body. Checked
+    #: by the DSM, the navigation field and CERG.reset q0 validation; bodies
+    #: not in the set are invisible to this constraint. Callers must put
+    #: FULL model body names here (e.g. left_ur_arm_gripper_grasp) — no
+    #: suffix matching happens at this level.
+    body_filter: frozenset[str] | None = None
 
     @abstractmethod
     def signed_distance(self, point: np.ndarray) -> float:
@@ -73,6 +82,7 @@ class HalfSpaceConstraint(Constraint):
     normal: np.ndarray
     offset: float
     kind: ConstraintKind = "soft"
+    name: str = ""
 
     def __post_init__(self):
         self.normal = np.asarray(self.normal, dtype=float)
@@ -109,20 +119,42 @@ class HalfSpaceConstraint(Constraint):
 # -------------------------------------------------------------------- #
 
 
-def load_constraints(path: str | Path) -> list[Constraint]:
+def build_constraint(entry: dict, name: str = "") -> Constraint:
+    """Build one Constraint from a yaml-style dict entry.
+
+    Shared by load_constraints (environment files) and the scene loader
+    (per-joint-set `constraints:` blocks in scene yamls).
+    """
+    ctype = str(entry.get("type", "")).lower()
+    builder = _BUILDERS.get(ctype)
+    if builder is None:
+        raise ValueError(f"Unknown constraint type '{ctype}'. Available: {list(_BUILDERS)}")
+    return builder(entry, name or str(entry.get("name", "")))
+
+
+def load_constraints(path: str | Path) -> dict[str, Constraint]:
     """Load constraints from a YAML environment file.
+
+    Returns a dict keyed by the ``name`` field in the YAML.
+    Use the values as lists when passing to CERG:
+
+        cs = load_constraints("wall_constraints.yaml")
+        left_cerg  = CERG(..., constraints=[cs["left"]])
+        right_cerg = CERG(..., constraints=[cs["right"]])
 
     Expected format:
         constraints:
-          - type: half_space
-            normal: [-1, 0, 0]
-            offset: -0.8
+          - name: left
+            type: half_space
+            normal: [0, -1, 0]
+            offset: -0.02
             kind: soft
 
-          - type: half_space
-            normal: [0, 0, 1]
-            offset: 0.0
-            kind: hard
+          - name: right
+            type: half_space
+            normal: [0, 1, 0]
+            offset: -0.02
+            kind: soft
     """
     try:
         import yaml
@@ -132,24 +164,24 @@ def load_constraints(path: str | Path) -> list[Constraint]:
     with open(path) as f:
         data = yaml.safe_load(f)
 
-    _BUILDERS = {
-        "half_space": _build_half_space,
-    }
-
-    constraints = []
-    for entry in data.get("constraints", []):
-        ctype = entry.get("type", "").lower()
-        builder = _BUILDERS.get(ctype)
-        if builder is None:
-            raise ValueError(f"Unknown constraint type '{ctype}'. Available: {list(_BUILDERS)}")
-        constraints.append(builder(entry))
+    constraints: dict[str, Constraint] = {}
+    for i, entry in enumerate(data.get("constraints", [])):
+        name = entry.get("name", str(i))
+        constraints[name] = build_constraint(entry, name)
 
     return constraints
 
 
-def _build_half_space(entry: dict) -> HalfSpaceConstraint:
+def _build_half_space(entry: dict, name: str) -> HalfSpaceConstraint:
     return HalfSpaceConstraint(
         normal=np.asarray(entry["normal"], dtype=float),
         offset=float(entry["offset"]),
         kind=entry.get("kind", "soft"),
+        name=name,
     )
+
+
+# type tag (yaml `type:` field) -> builder. Future: sphere, cylinder, ...
+_BUILDERS = {
+    "half_space": _build_half_space,
+}

@@ -18,6 +18,7 @@ from numpy.testing import assert_allclose
 from cerg.core.config import CERGConfig
 from cerg.core.cerg.auxiliary_reference import CERG
 from cerg.core.cerg.constraints import HalfSpaceConstraint
+from cerg.core.cerg.dsm import DSMReport
 from cerg.controllers.pd import PDController
 from cerg.robots.rrr import RRRRobot
 from cerg.simulators.mujoco_sim import MuJoCoSimulator
@@ -280,7 +281,8 @@ class TestCERGClosedLoop:
         sim.reset(q0=q0)
         cerg.reset(q0.copy())
 
-        with patch("cerg.core.cerg.auxiliary_reference.compute_dsm", return_value=1.0):
+        with patch("cerg.core.cerg.auxiliary_reference.compute_dsm",
+                   return_value=DSMReport(value=1.0)):
             for _ in range(3000):
                 state = sim.get_state()
                 q_v = cerg.step(state.q, state.qd, q_r)

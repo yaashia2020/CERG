@@ -23,6 +23,9 @@ from numpy.testing import assert_allclose
 from cerg.core.config import CERGConfig
 from cerg.core.cerg.auxiliary_reference import CERG
 from cerg.core.cerg.constraints import HalfSpaceConstraint
+from cerg.core.cerg.dsm import DSMReport, compute_dsm
+from cerg.core.robot import Q0ValidationError
+from cerg.core.scene import JointSetScene, load_scene_config
 from cerg.controllers.pd import PDController
 from cerg.robots.rrr import RRRRobot
 from cerg.simulators.drake_sim import DrakeSimulator
@@ -109,6 +112,136 @@ class TestCERGUnit:
         cerg.reset(q.copy())
         q_v = cerg.step(q, np.zeros(3), q.copy())
         assert_allclose(q_v, q, atol=0.01)
+
+    def test_target_can_update_live(self, sim, robot, config):
+        """q_r can be swapped between step() calls without resetting CERG.
+
+        After the swap, q_v must (a) stay finite, (b) not teleport (any single-
+        step jump stays well under the joint range), and (c) start drifting
+        toward the new target instead of the old one.
+        """
+        cerg = CERG(sim, robot, config=config)
+        q0 = np.array([0.0, 0.0, 0.0])
+        target_a = np.array([0.5,  0.0, 0.0])
+        target_b = np.array([0.0, -0.5, 0.5])    # different direction from A
+
+        cerg.reset(q0.copy())
+
+        # Phase 1: 50 steps toward target_a — establish baseline drift.
+        q_v = q0.copy()
+        for _ in range(50):
+            q_v = cerg.step(q0, np.zeros(3), target_a)
+            assert np.all(np.isfinite(q_v)), "q_v went non-finite during phase A"
+        q_v_before_swap = q_v.copy()
+
+        # Phase 2: swap target — first step after swap must not teleport.
+        q_v_after_one = cerg.step(q0, np.zeros(3), target_b)
+        jump = np.linalg.norm(q_v_after_one - q_v_before_swap)
+        assert jump < 0.05, f"q_v jumped {jump:.4f} on target swap — should be smooth"
+
+        # Phase 3: 200 more steps with target_b — q_v should move toward B,
+        # i.e. distance-to-B should be smaller at the end than just after swap.
+        q_v = q_v_after_one
+        for _ in range(200):
+            q_v = cerg.step(q0, np.zeros(3), target_b)
+            assert np.all(np.isfinite(q_v)), "q_v went non-finite during phase B"
+        dist_to_b_end   = np.linalg.norm(q_v - target_b)
+        dist_to_b_start = np.linalg.norm(q_v_after_one - target_b)
+        assert dist_to_b_end < dist_to_b_start, (
+            f"q_v not converging to new target B: "
+            f"start dist {dist_to_b_start:.4f}, end dist {dist_to_b_end:.4f}"
+        )
+
+    # -- last_dsm_report ------------------------------------------------- #
+
+    def test_last_dsm_report_is_none_before_step(self, sim, robot, config):
+        cerg = CERG(sim, robot, config=config)
+        cerg.reset(np.zeros(3))
+        assert cerg.last_dsm_report is None
+
+    def test_last_dsm_report_populated_after_step(self, sim, robot, config):
+        cerg = CERG(sim, robot, config=config)
+        q = np.array([0.1, 0.2, 0.3])
+        cerg.reset(q.copy())
+        cerg.step(q, np.zeros(3), np.array([0.5, 0.5, 0.5]))
+        report = cerg.last_dsm_report
+        assert isinstance(report, DSMReport)
+        assert isinstance(report.value, float)
+        assert isinstance(report.active, list)
+
+    def test_last_dsm_matches_report_value(self, sim, robot, config):
+        """cerg.last_dsm equals report.value * dsm_scale (default 1.0)."""
+        cerg = CERG(sim, robot, config=config, dsm_scale=1.0)
+        q = np.array([0.1, 0.2, 0.3])
+        cerg.reset(q.copy())
+        cerg.step(q, np.zeros(3), np.array([0.5, 0.5, 0.5]))
+        assert cerg.last_dsm == cerg.last_dsm_report.value
+
+    def test_last_dsm_report_active_contributions_are_violating(self, sim, robot, config):
+        """Every contribution listed in `active` has margin < 0."""
+        cerg = CERG(sim, robot, config=config)
+        q = np.array([0.0, 0.0, 0.0])
+        cerg.reset(q.copy())
+        cerg.step(q, np.zeros(3), np.array([0.5, 0.5, 0.5]))
+        report = cerg.last_dsm_report
+        for c in report.active:
+            assert c.margin < 0, f"active contribution {c} has non-negative margin"
+
+    def test_step_does_not_double_compute_dsm(self, sim, robot, config):
+        """A single step() should call compute_dsm exactly once."""
+        from unittest.mock import patch
+        cerg = CERG(sim, robot, config=config)
+        q = np.array([0.0, 0.0, 0.0])
+        cerg.reset(q.copy())
+        with patch(
+            "cerg.core.cerg.auxiliary_reference.compute_dsm",
+            wraps=compute_dsm,
+        ) as mock_cd:
+            cerg.step(q, np.zeros(3), np.array([0.5, 0.5, 0.5]))
+        assert mock_cd.call_count == 1, (
+            f"expected one compute_dsm call per step, got {mock_cd.call_count}"
+        )
+
+    def test_last_dsm_report_resets_to_none(self, sim, robot, config):
+        """reset() must clear last_dsm_report back to None."""
+        cerg = CERG(sim, robot, config=config)
+        q = np.array([0.1, 0.2, 0.3])
+        cerg.reset(q.copy())
+        cerg.step(q, np.zeros(3), np.array([0.5, 0.5, 0.5]))
+        assert cerg.last_dsm_report is not None
+        cerg.reset(q.copy())
+        assert cerg.last_dsm_report is None
+
+    # -- validate_q0 (via RobotModel + CERG.reset) ----------------------- #
+
+    def test_validate_q0_passes_for_valid_config(self, robot):
+        """A configuration well inside the joint limits should not raise."""
+        robot.validate_q0(np.zeros(robot.nq))
+
+    def test_validate_q0_raises_for_out_of_limits(self, robot):
+        """A q0 outside the joint limits must raise Q0ValidationError naming the joint."""
+        q_bad = robot.q_upper.copy()
+        q_bad[0] += 1.0  # push first joint above upper limit
+        with pytest.raises(Q0ValidationError) as exc_info:
+            robot.validate_q0(q_bad)
+        assert robot.joints[0].name in str(exc_info.value)
+
+    def test_validate_q0_raises_for_shape_mismatch(self, robot):
+        """A q0 of the wrong length must raise Q0ValidationError."""
+        with pytest.raises(Q0ValidationError):
+            robot.validate_q0(np.zeros(robot.nq + 1))
+
+    def test_cerg_reset_calls_validate_q0(self, sim, robot, config):
+        """CERG.reset must enforce robot.validate_q0 — bad q0 raises."""
+        cerg = CERG(sim, robot, config=config)
+        q_bad = robot.q_upper + 1.0  # every joint above its upper limit
+        with pytest.raises(Q0ValidationError):
+            cerg.reset(q_bad)
+
+    def test_cerg_reset_accepts_valid_q0(self, sim, robot, config):
+        """A valid q0 must not raise (regression — make sure we didn't break reset)."""
+        cerg = CERG(sim, robot, config=config)
+        cerg.reset(np.zeros(robot.nq))  # well inside limits
 
 
 # ------------------------------------------------------------------ #
@@ -664,3 +797,510 @@ class TestCERGClosedLoop:
                 title="RRR — DSM modulation test",
             )
             input("\nGraphs open — press Enter to close and finish test...")
+
+
+# ------------------------------------------------------------------ #
+#  Scene config loader (pure yaml -> dataclass, no sim needed)         #
+# ------------------------------------------------------------------ #
+
+
+class TestSceneConfig:
+    """Unit tests for cerg.core.scene.load_scene_config.
+
+    Pure yaml-to-dataclass tests. No simulator, no robot, no Drake — only the
+    file-parse contract: required keys, length agreement, finite values,
+    name-set agreement with the caller's joint order, and reordering.
+    """
+
+    JN = ["j_a", "j_b", "j_c"]   # the canonical "consumer" joint order
+
+    def _write(self, tmp_path, text: str):
+        p = tmp_path / "scene.yaml"
+        p.write_text(text)
+        return p
+
+    # ── happy paths ────────────────────────────────────────────────
+
+    def test_roundtrip_minimal(self, tmp_path):
+        path = self._write(tmp_path, """
+robot:
+  joint_names: [j_a, j_b, j_c]
+  q0:       [0.1, 0.2, 0.3]
+  q_target: [1.0, 2.0, 3.0]
+""")
+        scenes = load_scene_config(path, joint_orders={"robot": self.JN})
+        s = scenes["robot"]
+        assert isinstance(s, JointSetScene)
+        assert s.nq == 3
+        assert_allclose(s.q0,       [0.1, 0.2, 0.3])
+        assert_allclose(s.qd0,      [0.0, 0.0, 0.0])     # default zeros
+        assert_allclose(s.q_target, [1.0, 2.0, 3.0])
+
+    def test_qd0_explicit_loaded(self, tmp_path):
+        path = self._write(tmp_path, """
+robot:
+  joint_names: [j_a, j_b, j_c]
+  q0:       [0, 0, 0]
+  qd0:      [0.1, -0.2, 0.05]
+  q_target: [1, 1, 1]
+""")
+        scenes = load_scene_config(path, joint_orders={"robot": self.JN})
+        assert_allclose(scenes["robot"].qd0, [0.1, -0.2, 0.05])
+
+    def test_multiple_sets_loaded_independently(self, tmp_path):
+        path = self._write(tmp_path, """
+left:
+  joint_names: [j_a, j_b, j_c]
+  q0:       [0.1, 0.2, 0.3]
+  q_target: [1, 2, 3]
+right:
+  joint_names: [k_a, k_b, k_c]
+  q0:       [-0.1, -0.2, -0.3]
+  q_target: [-1, -2, -3]
+""")
+        scenes = load_scene_config(
+            path,
+            joint_orders={"left": self.JN, "right": ["k_a", "k_b", "k_c"]},
+        )
+        assert set(scenes) == {"left", "right"}
+        assert_allclose(scenes["left"].q0,    [0.1, 0.2, 0.3])
+        assert_allclose(scenes["right"].q0,  [-0.1, -0.2, -0.3])
+
+    def test_reorders_to_consumer_order(self, tmp_path):
+        """yaml lists joints in [a, c, b]; consumer wants [a, b, c]."""
+        path = self._write(tmp_path, """
+robot:
+  joint_names: [j_a, j_c, j_b]
+  q0:       [10, 30, 20]
+  qd0:      [1, 3, 2]
+  q_target: [100, 300, 200]
+""")
+        scenes = load_scene_config(path, joint_orders={"robot": self.JN})
+        s = scenes["robot"]
+        assert_allclose(s.q0,       [10, 20, 30])
+        assert_allclose(s.qd0,      [1,  2,  3])
+        assert_allclose(s.q_target, [100, 200, 300])
+
+    def test_extra_sets_in_yaml_are_ignored(self, tmp_path):
+        """yaml has 'left' and 'right'; caller only asks for 'left'."""
+        path = self._write(tmp_path, """
+left:
+  joint_names: [j_a, j_b, j_c]
+  q0:       [0, 0, 0]
+  q_target: [1, 1, 1]
+right:
+  joint_names: [k_a, k_b]
+  q0:       [0, 0]
+  q_target: [1, 1]
+""")
+        scenes = load_scene_config(path, joint_orders={"left": self.JN})
+        assert set(scenes) == {"left"}
+
+    # ── error cases ─────────────────────────────────────────────────
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            load_scene_config(tmp_path / "nope.yaml", joint_orders={"robot": self.JN})
+
+    def test_missing_set_raises(self, tmp_path):
+        """yaml has only 'left' but caller asks for 'right' too."""
+        path = self._write(tmp_path, """
+left:
+  joint_names: [j_a, j_b, j_c]
+  q0:       [0, 0, 0]
+  q_target: [1, 1, 1]
+""")
+        with pytest.raises(ValueError, match="missing joint set 'right'"):
+            load_scene_config(path, joint_orders={"left": self.JN, "right": self.JN})
+
+    def test_missing_joint_names_raises(self, tmp_path):
+        path = self._write(tmp_path, """
+robot:
+  q0:       [0, 0, 0]
+  q_target: [1, 1, 1]
+""")
+        with pytest.raises(ValueError, match="joint_names"):
+            load_scene_config(path, joint_orders={"robot": self.JN})
+
+    def test_missing_q0_raises(self, tmp_path):
+        path = self._write(tmp_path, """
+robot:
+  joint_names: [j_a, j_b, j_c]
+  q_target: [1, 1, 1]
+""")
+        with pytest.raises(ValueError, match="q0"):
+            load_scene_config(path, joint_orders={"robot": self.JN})
+
+    def test_missing_q_target_raises(self, tmp_path):
+        path = self._write(tmp_path, """
+robot:
+  joint_names: [j_a, j_b, j_c]
+  q0: [0, 0, 0]
+""")
+        with pytest.raises(ValueError, match="q_target"):
+            load_scene_config(path, joint_orders={"robot": self.JN})
+
+    def test_joint_names_mismatch_raises(self, tmp_path):
+        """yaml lists [j_a, j_b, j_x] but consumer wants [j_a, j_b, j_c]."""
+        path = self._write(tmp_path, """
+robot:
+  joint_names: [j_a, j_b, j_x]
+  q0:       [0, 0, 0]
+  q_target: [1, 1, 1]
+""")
+        with pytest.raises(ValueError, match="mismatch"):
+            load_scene_config(path, joint_orders={"robot": self.JN})
+
+    def test_length_mismatch_raises(self, tmp_path):
+        """joint_names has 3 entries but q0 has 4 values."""
+        path = self._write(tmp_path, """
+robot:
+  joint_names: [j_a, j_b, j_c]
+  q0:       [0, 0, 0, 0]
+  q_target: [1, 1, 1]
+""")
+        with pytest.raises(ValueError, match=r"length 4 != joint_names length 3"):
+            load_scene_config(path, joint_orders={"robot": self.JN})
+
+    def test_nan_in_q0_raises(self, tmp_path):
+        path = self._write(tmp_path, """
+robot:
+  joint_names: [j_a, j_b, j_c]
+  q0:       [0.0, .nan, 0.0]
+  q_target: [1, 1, 1]
+""")
+        with pytest.raises(ValueError, match="non-finite"):
+            load_scene_config(path, joint_orders={"robot": self.JN})
+
+    def test_inf_in_target_raises(self, tmp_path):
+        path = self._write(tmp_path, """
+robot:
+  joint_names: [j_a, j_b, j_c]
+  q0:       [0, 0, 0]
+  q_target: [1.0, .inf, 1.0]
+""")
+        with pytest.raises(ValueError, match="non-finite"):
+            load_scene_config(path, joint_orders={"robot": self.JN})
+
+    def test_duplicate_joint_names_raises(self, tmp_path):
+        path = self._write(tmp_path, """
+robot:
+  joint_names: [j_a, j_b, j_a]
+  q0:       [0, 0, 0]
+  q_target: [1, 1, 1]
+""")
+        with pytest.raises(ValueError, match="duplicate"):
+            load_scene_config(path, joint_orders={"robot": ["j_a", "j_b", "j_a"]})
+
+    def test_frozen_dataclass(self, tmp_path):
+        """JointSetScene is frozen — cannot mutate fields after load."""
+        import dataclasses
+        path = self._write(tmp_path, """
+robot:
+  joint_names: [j_a, j_b, j_c]
+  q0:       [0, 0, 0]
+  q_target: [1, 1, 1]
+""")
+        s = load_scene_config(path, joint_orders={"robot": self.JN})["robot"]
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            s.q0 = np.zeros(3)
+
+
+# ------------------------------------------------------------------ #
+#  DSM report — structured active-constraint reporting                 #
+# ------------------------------------------------------------------ #
+
+
+class TestDSMReport:
+    """compute_dsm now returns a DSMReport carrying per-contribution detail.
+
+    Each test below engineers ONE CERG step into a known violation regime,
+    calls compute_dsm directly (no closed-loop sim), and inspects
+    report.active for the expected kind / joint / body / name / step.
+
+    All tests use the module-scoped sim/robot/config fixtures.
+    """
+
+    # ── happy path ─────────────────────────────────────────────────
+
+    def test_no_violation_active_is_empty(self, sim, robot, config):
+        """At home posture with q_r close by, nothing should be predicted-violated."""
+        q   = np.array([0.1, 0.1, 0.1])
+        qd  = np.zeros(robot.nv)
+        q_v = np.array([0.15, 0.15, 0.15])    # tiny step, well within limits
+        report = compute_dsm(q=q, qd=qd, q_v=q_v,
+                             simulator=sim, robot=robot,
+                             constraints=[], config=config)
+        assert report.active == []
+        assert report.value >= 0.0
+        assert report.binding is not None
+        # binding's margin matches value pre-clamp (here value > 0 so they agree)
+        assert report.binding.margin == pytest.approx(report.value)
+
+    # ── joint position limits ─────────────────────────────────────
+
+    def test_position_upper_limit_active(self, sim, robot, config):
+        """q_v near the upper limit drives the prediction past q_upper for that joint."""
+        q   = robot.q_upper.copy() - 0.05    # already very close to upper
+        qd  = np.zeros(robot.nv)
+        q_v = robot.q_upper.copy() + 0.5      # pull beyond
+        report = compute_dsm(q=q, qd=qd, q_v=q_v,
+                             simulator=sim, robot=robot,
+                             constraints=[], config=config)
+        pos_active = [a for a in report.active if a.kind == "position"]
+        assert pos_active, "expected position contribution in active"
+        # All position violations should be upper-side, joint indexed.
+        for a in pos_active:
+            assert a.side == "upper"
+            assert 0 <= a.joint < robot.nv
+            assert a.margin < 0.0
+            assert 0 <= a.step <= config.num_pred_steps
+
+    def test_position_lower_limit_active(self, sim, robot, config):
+        """Symmetric to upper: drive past q_lower."""
+        q   = robot.q_lower.copy() + 0.05
+        qd  = np.zeros(robot.nv)
+        q_v = robot.q_lower.copy() - 0.5
+        report = compute_dsm(q=q, qd=qd, q_v=q_v,
+                             simulator=sim, robot=robot,
+                             constraints=[], config=config)
+        pos_active = [a for a in report.active if a.kind == "position"]
+        assert pos_active
+        for a in pos_active:
+            assert a.side == "lower"
+            assert 0 <= a.joint < robot.nv
+            assert a.margin < 0.0
+
+    # ── velocity limit ─────────────────────────────────────────────
+
+    def test_velocity_limit_active(self, sim, robot, config):
+        """High initial qd → predicted qd exceeds qd_max for at least one joint."""
+        q   = np.zeros(robot.nq)
+        # 10× the joint vel limit on joint 0 — should saturate the prediction.
+        qd  = np.zeros(robot.nv)
+        qd[0] = 10.0 * robot.qd_max[0]
+        q_v = np.zeros(robot.nq)
+        report = compute_dsm(q=q, qd=qd, q_v=q_v,
+                             simulator=sim, robot=robot,
+                             constraints=[], config=config)
+        vel_active = [a for a in report.active if a.kind == "velocity"]
+        assert vel_active, "expected velocity contribution in active"
+        assert any(a.joint == 0 for a in vel_active), "joint 0 should be among violators"
+        for a in vel_active:
+            assert a.side in ("lower", "upper")
+            assert a.margin < 0.0
+
+    # ── torque limit ───────────────────────────────────────────────
+
+    def test_torque_limit_active(self, sim, robot, config):
+        """Large position error with high Kp drives predicted tau past tau_max."""
+        q   = np.zeros(robot.nq)
+        qd  = np.zeros(robot.nv)
+        # Target far enough that Kp * err easily saturates the strongest joint.
+        # tau_max for RRR joint 0 is small; pushing q_v hard guarantees violation.
+        q_v = np.array([10.0, 0.0, 0.0])     # huge desired error on joint 0
+        report = compute_dsm(q=q, qd=qd, q_v=q_v,
+                             simulator=sim, robot=robot,
+                             constraints=[], config=config)
+        tau_active = [a for a in report.active if a.kind == "torque"]
+        assert tau_active, "expected torque contribution in active"
+        for a in tau_active:
+            assert a.side in ("lower", "upper")
+            assert 0 <= a.joint < robot.nv
+            assert a.margin < 0.0
+
+    # ── env (half-space) constraints ───────────────────────────────
+
+    def test_soft_constraint_active_carries_name(self, sim, robot, config):
+        """Predicted tip past a soft wall → 'soft' contribution with the wall's name."""
+        wall = HalfSpaceConstraint(
+            normal=np.array([1.0, 0.0, 0.0]), offset=0.1,
+            kind="soft", name="wall_x_soft",
+        )
+        # Arm extended forward: tip is at large +x, well beyond the wall at x=0.1.
+        q   = np.array([0.0, 0.0, 0.0])
+        qd  = np.zeros(robot.nv)
+        q_v = q.copy()                          # don't add joint-limit violations
+        report = compute_dsm(q=q, qd=qd, q_v=q_v,
+                             simulator=sim, robot=robot,
+                             constraints=[wall], config=config)
+        soft_active = [a for a in report.active if a.kind == "soft"]
+        assert soft_active, "expected soft contribution in active"
+        assert all(a.name == "wall_x_soft" for a in soft_active)
+        assert all(0 <= a.body < len(robot.body_names) for a in soft_active)
+        assert all(a.margin < 0.0 for a in soft_active)
+
+    def test_hard_constraint_active_carries_name(self, sim, robot, config):
+        """Same setup as soft, but kind='hard' — entry should be tagged 'hard'."""
+        wall = HalfSpaceConstraint(
+            normal=np.array([1.0, 0.0, 0.0]), offset=0.1,
+            kind="hard", name="wall_x_hard",
+        )
+        q   = np.array([0.0, 0.0, 0.0])
+        qd  = np.zeros(robot.nv)
+        q_v = q.copy()
+        report = compute_dsm(q=q, qd=qd, q_v=q_v,
+                             simulator=sim, robot=robot,
+                             constraints=[wall], config=config)
+        hard_active = [a for a in report.active if a.kind == "hard"]
+        assert hard_active
+        assert all(a.name == "wall_x_hard" for a in hard_active)
+
+    # ── energy ─────────────────────────────────────────────────────
+
+    def test_energy_active(self, sim, robot, config):
+        """Energy contribution is `max(kappa_s * d_soft, kappa_e * (E_max - energy))`.
+
+        It is negative only when BOTH d_soft AND (E_max - energy) are negative —
+        the prediction violates a soft constraint AND total energy exceeds E_max.
+        Set up both: tip past a soft wall plus high initial qd → KE > E_max.
+        """
+        wall = HalfSpaceConstraint(
+            normal=np.array([1.0, 0.0, 0.0]), offset=0.1,
+            kind="soft", name="wall_x",
+        )
+        q   = np.zeros(robot.nq)          # tip at large +x → violates wall
+        qd  = np.full(robot.nv, 50.0)     # high KE → energy >> E_max
+        q_v = q.copy()
+        report = compute_dsm(q=q, qd=qd, q_v=q_v,
+                             simulator=sim, robot=robot,
+                             constraints=[wall], config=config)
+        energy_active = [a for a in report.active if a.kind == "energy"]
+        assert energy_active, "expected energy contribution in active"
+        assert energy_active[0].step == -1
+        assert energy_active[0].joint == -1
+        assert energy_active[0].body == -1
+        assert energy_active[0].margin < 0.0
+
+    # ── multiple-kinds-at-once ────────────────────────────────────
+
+    def test_multiple_simultaneous_active(self, sim, robot, config):
+        """A single CERG step can surface multiple constraint kinds at once.
+
+        q=[0,0,0] puts the tip at large +x (past the wall) so 'soft' fires.
+        A large q_v error drives torque/velocity past limits as well.
+        We just assert that *more than one kind* shows up — exactly which
+        ones depend on the saturation order of the prediction dynamics.
+        """
+        wall = HalfSpaceConstraint(
+            normal=np.array([1.0, 0.0, 0.0]), offset=0.1,
+            kind="soft", name="wall",
+        )
+        q   = np.array([0.0, 0.0, 0.0])
+        qd  = np.zeros(robot.nv)
+        q_v = np.array([robot.q_upper[0] + 5.0, 0.0, 0.0])
+        report = compute_dsm(q=q, qd=qd, q_v=q_v,
+                             simulator=sim, robot=robot,
+                             constraints=[wall], config=config)
+        kinds_present = {a.kind for a in report.active}
+        # At minimum: the wall ('soft') must show, plus at least one joint kind.
+        assert "soft" in kinds_present, f"expected soft; got {kinds_present}"
+        joint_kinds = {"torque", "position", "velocity"} & kinds_present
+        assert joint_kinds, (
+            f"expected at least one of torque/position/velocity active; "
+            f"got {kinds_present}"
+        )
+        assert len(kinds_present) >= 2
+
+    # ── step-field bounds and binding/argmin consistency ──────────
+
+    def test_step_field_within_horizon_bounds(self, sim, robot, config):
+        """Any step >= 0 in active must be a valid horizon index."""
+        q   = robot.q_upper.copy() - 0.05
+        qd  = np.zeros(robot.nv)
+        q_v = robot.q_upper.copy() + 0.5
+        report = compute_dsm(q=q, qd=qd, q_v=q_v,
+                             simulator=sim, robot=robot,
+                             constraints=[], config=config)
+        for a in report.active:
+            if a.step >= 0:
+                assert 0 <= a.step <= config.num_pred_steps, (
+                    f"contribution {a} has step out of [0, {config.num_pred_steps}]"
+                )
+
+    def test_binding_equals_argmin_over_all_kinds(self, sim, robot, config):
+        """report.binding must be the contribution with the minimum margin
+        across every kind, including non-active (positive-margin) ones."""
+        q   = np.array([0.05, 0.05, 0.05])
+        qd  = np.zeros(robot.nv)
+        q_v = np.array([0.1, 0.1, 0.1])     # safe scenario
+        report = compute_dsm(q=q, qd=qd, q_v=q_v,
+                             simulator=sim, robot=robot,
+                             constraints=[], config=config)
+        # No violations expected.
+        assert report.active == []
+        # binding should match raw_min (which compute_dsm clamped to 0 in value).
+        assert report.binding is not None
+        assert report.binding.margin <= report.value + 1e-12
+
+
+# ------------------------------------------------------------------ #
+#  Multi-step closed-loop: report evolves as the real robot moves     #
+# ------------------------------------------------------------------ #
+
+
+class TestDSMReportClosedLoop:
+    def test_soft_constraint_activates_partway_through_sim(
+        self, sim, robot, config, controller,
+    ):
+        """Arm starts safe, gets driven toward a wall. The report's `active` list
+        starts empty, eventually contains a 'soft' entry, and that entry's
+        `step` field decreases over sim time — the predicted violation appears
+        earlier in the horizon as the real robot gets closer.
+        """
+        wall = HalfSpaceConstraint(
+            normal=np.array([1.0, 0.0, 0.0]), offset=0.6,
+            kind="soft", name="wall_x",
+        )
+        cerg = CERG(sim, robot, constraints=[wall], config=config)
+
+        q0  = np.array([np.pi / 2, 0.0, 0.0])    # arm up: bodies near x≈0
+        q_r = np.array([0.0, 0.0, 0.0])           # arm extended: tip at x≈0.9
+
+        sim.reset(q0=q0)
+        cerg.reset(q0.copy())
+
+        first_active_sim_step: int | None = None
+        horizon_steps_at_activation: list[int] = []
+
+        for sim_step in range(5000):
+            state = sim.get_state()
+            q_v = cerg.step(state.q, state.qd, q_r)
+            # last_dsm_report is the report computed inside step() at the
+            # pre-step q_v — same value as recomputing compute_dsm here.
+            report = cerg.last_dsm_report
+            tau = controller.compute(state, q_v)
+            sim.step(tau)
+
+            soft = [a for a in report.active if a.kind == "soft"]
+            if soft:
+                if first_active_sim_step is None:
+                    first_active_sim_step = sim_step
+                # Every active soft entry should be the wall, body-indexed,
+                # negative margin, and within horizon bounds.
+                for a in soft:
+                    assert a.name == "wall_x"
+                    assert 0 <= a.body < len(robot.body_names)
+                    assert a.margin < 0.0
+                    assert 0 <= a.step <= config.num_pred_steps
+                # Track the worst (most negative) entry's step.
+                worst = min(soft, key=lambda a: a.margin)
+                horizon_steps_at_activation.append(worst.step)
+
+        # 1. Eventually went active.
+        assert first_active_sim_step is not None, (
+            "soft constraint never activated — scenario does not exercise the report"
+        )
+        # 2. Was safe at the start (didn't activate on the very first sim step).
+        assert first_active_sim_step > 0
+        # 3. Horizon-step trends DOWN as the real robot approaches the wall.
+        #    Compare first vs last quartile of active observations.
+        n = len(horizon_steps_at_activation)
+        assert n >= 8, f"too few active samples to compare trends (got {n})"
+        early = float(np.mean(horizon_steps_at_activation[: n // 4]))
+        late  = float(np.mean(horizon_steps_at_activation[-n // 4:]))
+        assert late < early, (
+            f"violation should appear earlier in the horizon as sim progresses; "
+            f"got early-avg step={early:.1f}, late-avg step={late:.1f}"
+        )
+

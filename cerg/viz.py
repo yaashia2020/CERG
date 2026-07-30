@@ -45,9 +45,15 @@ optional; omit any you don't have.
 
 from __future__ import annotations
 
+import os
+import pickle
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from cerg.core.robot import RobotModel
 
 
 def open_meshcat(sim, *, prompt: str = "\nOpen the Meshcat URL in your browser, then press Enter to start...") -> None:
@@ -82,6 +88,8 @@ class _Step:
     energy: float | None
     soft_contact: bool
     ee_pos: dict | None  # {body_name: (3,) world position}
+    tau_meas: np.ndarray | None = None   # measured joint effort (nv,)
+    state_stamp: float | None = None     # header.stamp of the state msg (s)
 
 
 class CERGHistory:
@@ -111,6 +119,8 @@ class CERGHistory:
         energy: float | None = None,
         soft_contact: bool = False,
         ee_pos: dict | None = None,
+        tau_meas: np.ndarray | None = None,
+        state_stamp: float | None = None,
     ) -> None:
         """Append one timestep of data.
 
@@ -130,6 +140,10 @@ class CERGHistory:
                         to place a vertical marker on the energy panel.
         ee_pos        : dict mapping end-effector body name → (3,) world position.
                         Pass robot.end_effectors positions to populate the EE plot.
+        tau_meas      : measured joint effort (nv,) as reported by the robot —
+                        overlaid on the torque figure against the commanded tau.
+        state_stamp   : header.stamp (seconds) of the state message q/qd came
+                        from — lets offline analysis detect stale feedback.
         """
         self._steps.append(_Step(
             t=float(t),
@@ -143,6 +157,9 @@ class CERGHistory:
             soft_contact=bool(soft_contact),
             ee_pos={k: np.asarray(v, dtype=float).copy() for k, v in ee_pos.items()}
                    if ee_pos is not None else None,
+            tau_meas=np.asarray(tau_meas, dtype=float).copy()
+                     if tau_meas is not None else None,
+            state_stamp=float(state_stamp) if state_stamp is not None else None,
         ))
 
     def clear(self) -> None:
@@ -151,6 +168,32 @@ class CERGHistory:
 
     def __len__(self) -> int:
         return len(self._steps)
+
+    # ── Persistence ───────────────────────────────────────────────────── #
+
+    def save(self, path: str, robot: "RobotModel", *, arm: str = "") -> None:
+        """Pickle this history plus the robot metadata that plot() needs.
+
+        The bundle is a dict with the keys consumed by :func:`view` — keep
+        the schema in sync with that function if you extend it.
+        """
+        bundle = {
+            "history": self,
+            "arm": arm,
+            "joint_names": [j.name for j in robot.joints],
+            "q_lower": robot.q_lower,
+            "q_upper": robot.q_upper,
+            "qd_max":  robot.qd_max,
+            "tau_max": robot.tau_max,
+        }
+        with open(path, "wb") as f:
+            pickle.dump(bundle, f)
+
+    @classmethod
+    def load(cls, path: str) -> dict:
+        """Unpickle a bundle previously written by :meth:`save`."""
+        with open(path, "rb") as f:
+            return pickle.load(f)
 
     # ── Array accessors ───────────────────────────────────────────────── #
 
@@ -177,6 +220,23 @@ class CERGHistory:
     @property
     def tau(self) -> np.ndarray:      # (nv, N)
         return np.stack([s.tau for s in self._steps], axis=1)
+
+    @property
+    def tau_meas(self) -> np.ndarray | None:  # (nv, N), or None if never recorded
+        # getattr: pickles saved before tau_meas existed have no such attr.
+        vals = [getattr(s, "tau_meas", None) for s in self._steps]
+        if all(v is None for v in vals):
+            return None
+        nv = self._steps[0].q.shape[0]
+        nan = np.full(nv, np.nan)
+        return np.stack([v if v is not None else nan for v in vals], axis=1)
+
+    @property
+    def state_stamp(self) -> np.ndarray | None:  # (N,), or None if never recorded
+        vals = [getattr(s, "state_stamp", None) for s in self._steps]
+        if all(v is None for v in vals):
+            return None
+        return np.array([v if v is not None else float("nan") for v in vals])
 
     @property
     def dsm(self) -> np.ndarray:      # (N,)
@@ -227,6 +287,7 @@ class CERGHistory:
         title: str | None = None,
         constraints: list | None = None,
         E_max: float | None = None,
+        ee_ref: dict | None = None,
         show: bool = True,
     ) -> list:
         """Produce four diagnostic figures for the recorded run.
@@ -247,6 +308,9 @@ class CERGHistory:
                             dashed lines on the end-effector position figure
         E_max             : energy limit (e.g. config.E_max) — drawn as a
                             horizontal dashed line on the energy panel
+        ee_ref            : dict mapping end-effector name → (3,) world position
+                            of the goal reference r — drawn as a dotted line on
+                            that end-effector's row
         show              : call ``plt.show()`` after creating all figures
         """
         try:
@@ -281,6 +345,8 @@ class CERGHistory:
                 _broadcast(-tau_limit if tau_limit is not None else None, nv),
                 _broadcast(tau_limit, nv),
                 names, _mk_title("Joint Torques"), "N·m",
+                overlay=self.tau_meas,
+                labels=("commanded", "measured"),
             ),
             _fig_dsm_energy(
                 t, self.dsm, self.energy, self.soft_contact_times,
@@ -294,6 +360,7 @@ class CERGHistory:
             figs.append(_fig_end_effector_positions(
                 t, ee_data, constraints or [],
                 _mk_title("End-Effector Positions"),
+                ee_ref=ee_ref,
             ))
 
         if show:
@@ -373,8 +440,87 @@ def _hide_unused(axes: np.ndarray, nv: int, n_rows: int, n_cols: int) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────── #
+#  Public plot helper for pure-PD runs                                      #
+# ──────────────────────────────────────────────────────────────────────── #
+
+def plot_pd(
+    t: np.ndarray,
+    q: np.ndarray,    # (N, nv)
+    qd: np.ndarray,   # (N, nv)
+    tau: np.ndarray,  # (N, nv)
+    *,
+    q_target: np.ndarray | None = None,
+    q_lower: np.ndarray | None = None,
+    q_upper: np.ndarray | None = None,
+    qd_limit: np.ndarray | None = None,
+    tau_limit: np.ndarray | None = None,
+    joint_names: list[str] | None = None,
+    title: str = "PD",
+    show: bool = True,
+) -> list:
+    """Three diagnostic figures for a pure-PD run: positions, velocities, torques."""
+    nv    = q.shape[1]
+    names = joint_names or [f"J{i + 1}" for i in range(nv)]
+
+    def _mk(sub: str) -> str:
+        return f"{title} — {sub}"
+
+    q_lo    = _broadcast(q_lower,   nv)
+    q_hi    = _broadcast(q_upper,   nv)
+    qd_lim  = _broadcast(qd_limit,  nv)
+    tau_lim = _broadcast(tau_limit, nv)
+
+    figs = [
+        _fig_positions_pd(t, q.T, q_target, q_lo, q_hi, names, _mk("Joint Positions")),
+        _fig_joint_scalar(t, qd.T,
+                          -qd_lim  if qd_lim  is not None else None, qd_lim,
+                          names, _mk("Joint Velocities"), "rad/s"),
+        _fig_joint_scalar(t, tau.T,
+                          -tau_lim if tau_lim is not None else None, tau_lim,
+                          names, _mk("Joint Torques"), "N·m"),
+    ]
+
+    if show:
+        import matplotlib.pyplot as plt
+        plt.show()
+
+    return figs
+
+
+# ──────────────────────────────────────────────────────────────────────── #
 #  Figure builders                                                          #
 # ──────────────────────────────────────────────────────────────────────── #
+
+def _fig_positions_pd(t, q, q_target, q_lower, q_upper, names, suptitle):
+    """Joint positions for a PD run — q actual + optional constant target line."""
+    import matplotlib.pyplot as plt
+
+    nv = q.shape[0]
+    n_rows, n_cols = _grid_shape(nv)
+    colors = _joint_colors(nv)
+
+    fig, axes = plt.subplots(n_rows, n_cols,
+                             figsize=(4.6 * n_cols, 3.2 * n_rows), squeeze=False)
+    fig.suptitle(suptitle, fontsize=11, fontweight="bold")
+
+    for i in range(nv):
+        r, c = divmod(i, n_cols)
+        ax   = axes[r][c]
+        ax.plot(t, q[i], color=colors[i], lw=1.6, label="q (actual)")
+        if q_target is not None:
+            ax.axhline(q_target[i], color="#555555", lw=1.0, ls="--", label="q_r (target)")
+        lo = q_lower[i] if q_lower is not None else None
+        hi = q_upper[i] if q_upper is not None else None
+        _apply_limits(ax, lo, hi, q[i])
+        _style_ax(ax, names[i], "rad")
+        if i == 0:
+            if lo is not None or hi is not None:
+                ax.plot([], [], color="#d32f2f", lw=0.9, ls="--", label="joint limit")
+            ax.legend(fontsize=7, loc="best", framealpha=0.75)
+
+    _hide_unused(axes, nv, n_rows, n_cols)
+    fig.tight_layout()
+    return fig
 
 def _fig_positions(t, q, q_v, q_r, q_lower, q_upper, names, suptitle):
     """Figure 1: joint positions — q, q_v, q_r with limits."""
@@ -419,8 +565,14 @@ def _fig_positions(t, q, q_v, q_r, q_lower, q_upper, names, suptitle):
     return fig
 
 
-def _fig_joint_scalar(t, data, lo_arr, hi_arr, names, suptitle, ylabel):
-    """Generic per-joint single-signal figure (qd or tau) with symmetric limits."""
+def _fig_joint_scalar(t, data, lo_arr, hi_arr, names, suptitle, ylabel,
+                      overlay=None, labels=None):
+    """Generic per-joint single-signal figure (qd or tau) with symmetric limits.
+
+    overlay : optional second (nv, N) signal drawn dashed on each joint's axes
+              (e.g. measured torque against commanded); labels is the pair of
+              legend labels for (data, overlay).
+    """
     import matplotlib.pyplot as plt
 
     nv = data.shape[0]
@@ -438,29 +590,41 @@ def _fig_joint_scalar(t, data, lo_arr, hi_arr, names, suptitle, ylabel):
         r, c = divmod(i, n_cols)
         ax   = axes[r][c]
 
-        ax.plot(t, data[i], color=colors[i], lw=1.6)
+        ax.plot(t, data[i], color=colors[i], lw=1.6,
+                label=labels[0] if labels else None)
+        if overlay is not None:
+            ax.plot(t, overlay[i], color="black", lw=1.0, ls="--", alpha=0.7,
+                    label=labels[1] if labels else None)
 
         lo = lo_arr[i] if lo_arr is not None else None
         hi = hi_arr[i] if hi_arr is not None else None
         _apply_limits(ax, lo, hi, data[i])
 
         _style_ax(ax, names[i], ylabel)
+        if overlay is not None and i == 0:
+            ax.legend(fontsize=7, loc="best")
 
     _hide_unused(axes, nv, n_rows, n_cols)
     fig.tight_layout()
     return fig
 
 
-def _fig_end_effector_positions(t, ee_data, constraints, suptitle):
+def _fig_end_effector_positions(t, ee_data, constraints, suptitle, ee_ref=None):
     """Figure: world-frame x/y/z positions of each end-effector over time.
 
     One row per end-effector, three columns for x / y / z.
-    Axis-aligned half-space constraints are drawn as dashed lines on the
+    An entry named ``"<name> (q_v)"`` is not given its own row — it is
+    overlaid (dashed) on ``<name>``'s row. ``ee_ref[name]`` (the goal r,
+    a (3,) world point) is drawn as a dotted horizontal line.
+    Axis-aligned half-space constraints are drawn as red lines on the
     matching axis column (solid = hard, dashed = soft).
     """
     import matplotlib.pyplot as plt
 
-    ee_names = list(ee_data.keys())
+    _QV_SUFFIX = " (q_v)"
+    _R_SUFFIX = " (r)"
+    ee_names = [n for n in ee_data.keys()
+                if not n.endswith(_QV_SUFFIX) and not n.endswith(_R_SUFFIX)]
     n_ee = len(ee_names)
     axis_labels = ["x (m)", "y (m)", "z (m)"]
     axis_colors = ["#1976D2", "#388E3C", "#F57C00"]
@@ -473,7 +637,12 @@ def _fig_end_effector_positions(t, ee_data, constraints, suptitle):
         n = np.asarray(c.normal, dtype=float)
         col = int(np.argmax(np.abs(n)))
         if abs(n[col]) > 0.99:
-            constraint_lines.append((col, float(c.offset), getattr(c, "kind", "")))
+            # Half-space: safe when n·p <= offset. For an axis-aligned normal
+            # the boundary coordinate is offset / n[col] (sign matters:
+            # n=[0,-1,0], offset=0.7 -> plane at y = -0.7, not +0.7).
+            constraint_lines.append(
+                (col, float(c.offset) / float(n[col]), getattr(c, "kind", ""))
+            )
 
     fig, axes = plt.subplots(
         n_ee, 3,
@@ -483,10 +652,23 @@ def _fig_end_effector_positions(t, ee_data, constraints, suptitle):
     fig.suptitle(suptitle, fontsize=11, fontweight="bold")
 
     for row, name in enumerate(ee_names):
-        pos = ee_data[name]  # (3, N)
+        pos = ee_data[name]                       # (3, N) measured
+        pos_qv = ee_data.get(name + _QV_SUFFIX)   # (3, N) auxiliary ref, optional
+        pos_r = ee_data.get(name + _R_SUFFIX)     # (3, N) FK of goal q_r, optional
+        ref = None if ee_ref is None else ee_ref.get(name)  # (3,) goal r, optional
         for col in range(3):
             ax = axes[row][col]
-            ax.plot(t, pos[col], color=axis_colors[col], lw=1.5)
+            ax.plot(t, pos[col], color=axis_colors[col], lw=1.5, label="q")
+            if pos_qv is not None:
+                ax.plot(t, pos_qv[col], color="#555555", lw=1.2, ls="--",
+                        label="q_v")
+            if pos_r is not None:
+                # Time series, not axhline: waypoint schedules step q_r mid-run.
+                ax.plot(t, pos_r[col], color="#9C27B0", lw=1.2, ls=":",
+                        label="r")
+            elif ref is not None:
+                ax.axhline(float(ref[col]), color="#9C27B0", lw=1.2, ls=":",
+                           label="r")
             ax.set_title(f"{name}  {axis_labels[col]}", fontsize=9, pad=3)
             ax.set_xlabel("t (s)", fontsize=8)
             ax.set_ylabel(axis_labels[col], fontsize=8)
@@ -500,7 +682,7 @@ def _fig_end_effector_positions(t, ee_data, constraints, suptitle):
                         offset, color="#d32f2f", lw=1.2, ls=ls, alpha=0.9,
                         label=f"{kind} boundary ({axis_labels[col].split()[0]}={offset})",
                     )
-                    ax.legend(fontsize=7, loc="best", framealpha=0.75)
+            ax.legend(fontsize=7, loc="best", framealpha=0.75)
 
     fig.tight_layout()
     return fig
@@ -548,7 +730,7 @@ def _fig_dsm_energy(t, dsm, energy, contact_times, E_max, suptitle):
         _legend_contact_added = False
         for tc in contact_times:
             label = "soft contact" if not _legend_contact_added else None
-            ax_e.axvline(tc, color="#F57C00", lw=1.0, ls="--", alpha=0.75, label=label)
+            ax_e.axvline(tc, color="#F57C00", lw=1.0, ls="--", alpha=0.20, label=label)
             _legend_contact_added = True
 
         ax_e.set_ylabel("Energy (J)", fontsize=9)
@@ -561,3 +743,81 @@ def _fig_dsm_energy(t, dsm, energy, contact_times, E_max, suptitle):
 
     fig.tight_layout()
     return fig
+
+
+# ──────────────────────────────────────────────────────────────────────── #
+#  Pickle viewer                                                            #
+# ──────────────────────────────────────────────────────────────────────── #
+
+def view(
+    path: str,
+    *,
+    show: bool = True,
+    save_dir: str | None = None,
+) -> list:
+    """Load a pickle saved by :meth:`CERGHistory.save` and plot it.
+
+    Parameters
+    ----------
+    path     : path to the pickled bundle.
+    show     : if True, calls ``plt.show()`` to open interactive windows.
+    save_dir : if given, writes one PNG per figure into this directory
+               (e.g. ``left_positions.png``). Directory is created if missing.
+               ``show`` and ``save_dir`` are independent — set both to do both,
+               set ``show=False`` and a directory to render headlessly.
+
+    Returns the list of matplotlib figures from ``CERGHistory.plot``.
+    """
+    bundle = CERGHistory.load(path)
+    history: CERGHistory = bundle["history"]
+    arm = bundle.get("arm", "")
+
+    if len(history) == 0:
+        raise RuntimeError(f"pickle contains no samples (arm={arm!r})")
+
+    figs = history.plot(
+        q_lower=bundle["q_lower"],
+        q_upper=bundle["q_upper"],
+        qd_limit=bundle["qd_max"],
+        tau_limit=bundle["tau_max"],
+        joint_names=list(bundle["joint_names"]),
+        title=f"CERG run — {arm} ({os.path.basename(path)})",
+        show=False,  # we control show ourselves, after optional PNG dump
+    )
+
+    if save_dir is not None:
+        os.makedirs(save_dir, exist_ok=True)
+        prefix = f"{arm}_" if arm else ""
+        names = ["positions", "velocities", "torques", "dsm_energy", "ee_positions"]
+        for fig, name in zip(figs, names):
+            fig.savefig(os.path.join(save_dir, f"{prefix}{name}.png"),
+                        dpi=120, bbox_inches="tight")
+
+    if show:
+        import matplotlib.pyplot as plt
+        plt.show()
+
+    return figs
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    ap = argparse.ArgumentParser(
+        prog="python -m cerg.viz",
+        description="Open a CERGHistory pickle and either show or save plots.",
+    )
+    ap.add_argument("pickle_path",
+                    help="Path to the .pkl saved by CERGHistory.save().")
+    ap.add_argument("--save-dir", default=None,
+                    help="If given, save one PNG per figure into this directory.")
+    ap.add_argument("--no-show", action="store_true",
+                    help="Don't open interactive windows (use with --save-dir).")
+    args = ap.parse_args()
+
+    try:
+        view(args.pickle_path, show=not args.no_show, save_dir=args.save_dir)
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)

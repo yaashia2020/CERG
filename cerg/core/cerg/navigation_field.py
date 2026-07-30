@@ -99,10 +99,17 @@ def _constraint_repulsion(
     for i, body_name in enumerate(body_names):
         body_pos = body_positions[:, i]
 
+        # Jacobian only needed if some constraint actually applies to this body.
+        applicable = [c for c in constraints
+                      if getattr(c, "body_filter", None) is None
+                      or body_name in c.body_filter]
+        if not applicable:
+            continue
+
         J = simulator.get_translational_jacobian(body_name, q=q_v)
         J_pinv = np.linalg.pinv(J)
 
-        for ci, constraint in enumerate(constraints):
+        for constraint in applicable:
             n = constraint.outward_normal(body_pos)
             dist = constraint.signed_distance(body_pos)
 
@@ -174,4 +181,13 @@ def compute_navigation_field(
     rho_rep = joint_limit_repulsion(q_v, robot, config)
     rho_soft = _constraint_repulsion(q_v, simulator, robot, soft_constraints, soft_scale, config)
     rho_hard = _constraint_repulsion(q_v, simulator, robot, hard_constraints, hard_scale, config)
+    # Debug leftovers — this condition is true EVERY tick once q_v has
+    # converged to q_r (zero field at the goal), so these prints flooded
+    # stdout at tick rate from inside the control loop. Keep commented.
+    # if np.all(rho_att + rho_rep + rho_soft + rho_hard == 0):
+    #     print("rho_att:", rho_att)
+    #     print("rho_rep:", rho_rep)
+    #     print("rho_soft:", rho_soft)
+    #     print("rho_hard:", rho_hard)
+    #     # breakpoint()
     return rho_att + rho_rep + rho_soft + rho_hard

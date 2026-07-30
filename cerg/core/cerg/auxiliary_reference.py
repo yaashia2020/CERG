@@ -50,11 +50,16 @@ class CERG:
         robot: RobotModel,
         constraints: list[Constraint] | None = None,
         config: CERGConfig | None = None,
+        dsm_scale: float = 1.0,
     ):
         self._sim = simulator
         self._robot = robot
-        self._constraints = constraints or []
+        # Keep the CALLER'S list object (no `or []` copy-on-empty): callers
+        # may mutate the list in place mid-run (moving planes, timed
+        # activation gates) and step() must see those changes.
+        self._constraints = constraints if constraints is not None else []
         self._config = config or CERGConfig()
+        self._dsm_scale = dsm_scale
 
         # Indices (into self._constraints) of soft constraints; order matches
         # the sublist passed to compute_navigation_field, so the per-constraint
@@ -85,15 +90,22 @@ class CERG:
     def reset(self, q_v0: np.ndarray) -> None:
         """Set the initial auxiliary reference.
 
-        Raises ValueError if any robot body violates a constraint at q_v0.
+        Raises Q0ValidationError if q0 fails ``robot.validate_q0`` (joint
+        limits, plus any robot-specific overrides). Raises ValueError if
+        any robot body violates an environment constraint at q_v0.
         """
         q_v0 = np.asarray(q_v0, dtype=float).copy()
+
+        self._robot.validate_q0(q_v0, self._sim)
 
         if self._constraints:
             body_names = self._robot.body_names
             body_pos = self._sim.get_all_body_positions(body_names, q=q_v0)  # (3, num_bodies)
             for c in self._constraints:
+                allowed = getattr(c, "body_filter", None)
                 for i, name in enumerate(body_names):
+                    if allowed is not None and name not in allowed:
+                        continue
                     d = c.signed_distance(body_pos[:, i])
                     if d < 0:
                         raise ValueError(
@@ -124,6 +136,10 @@ class CERG:
     def last_dsm_report(self) -> DSMReport | None:
         """Full DSMReport from the last step() call.
 
+        None before the first step (and after reset). Holds the same scalar
+        as ``last_dsm`` in ``.value``, plus the binding contribution and the
+        full list of active (violating) contributions — useful for telemetry
+        without recomputing ``compute_dsm`` externally.
         None before the first step (and after reset). Holds the binding
         contribution and the full list of active (violating) contributions —
         useful for telemetry without recomputing ``compute_dsm`` externally.
@@ -213,11 +229,10 @@ class CERG:
             constraints=self._constraints,
             config=cfg,
         )
-        # 0.45 scale preserved from the pre-report compute_dsm (debug state)
-        dsm = 0.45 * report.value
+        dsm = report.value * self._dsm_scale
         self._last_dsm = dsm
         self._last_dsm_report = report
         # 3. ODE Euler step: dq_v/dt = DSM * rho
-        self._q_v = self._q_v + dsm * rho * cfg.erg_dt
+        self._q_v = self._q_v + 2.0*dsm * rho * cfg.erg_dt
 
         return self._q_v.copy()
