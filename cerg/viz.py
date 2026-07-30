@@ -622,7 +622,9 @@ def _fig_end_effector_positions(t, ee_data, constraints, suptitle, ee_ref=None):
     import matplotlib.pyplot as plt
 
     _QV_SUFFIX = " (q_v)"
-    ee_names = [n for n in ee_data.keys() if not n.endswith(_QV_SUFFIX)]
+    _R_SUFFIX = " (r)"
+    ee_names = [n for n in ee_data.keys()
+                if not n.endswith(_QV_SUFFIX) and not n.endswith(_R_SUFFIX)]
     n_ee = len(ee_names)
     axis_labels = ["x (m)", "y (m)", "z (m)"]
     axis_colors = ["#1976D2", "#388E3C", "#F57C00"]
@@ -652,6 +654,7 @@ def _fig_end_effector_positions(t, ee_data, constraints, suptitle, ee_ref=None):
     for row, name in enumerate(ee_names):
         pos = ee_data[name]                       # (3, N) measured
         pos_qv = ee_data.get(name + _QV_SUFFIX)   # (3, N) auxiliary ref, optional
+        pos_r = ee_data.get(name + _R_SUFFIX)     # (3, N) FK of goal q_r, optional
         ref = None if ee_ref is None else ee_ref.get(name)  # (3,) goal r, optional
         for col in range(3):
             ax = axes[row][col]
@@ -659,7 +662,11 @@ def _fig_end_effector_positions(t, ee_data, constraints, suptitle, ee_ref=None):
             if pos_qv is not None:
                 ax.plot(t, pos_qv[col], color="#555555", lw=1.2, ls="--",
                         label="q_v")
-            if ref is not None:
+            if pos_r is not None:
+                # Time series, not axhline: waypoint schedules step q_r mid-run.
+                ax.plot(t, pos_r[col], color="#9C27B0", lw=1.2, ls=":",
+                        label="r")
+            elif ref is not None:
                 ax.axhline(float(ref[col]), color="#9C27B0", lw=1.2, ls=":",
                            label="r")
             ax.set_title(f"{name}  {axis_labels[col]}", fontsize=9, pad=3)
@@ -723,7 +730,7 @@ def _fig_dsm_energy(t, dsm, energy, contact_times, E_max, suptitle):
         _legend_contact_added = False
         for tc in contact_times:
             label = "soft contact" if not _legend_contact_added else None
-            ax_e.axvline(tc, color="#F57C00", lw=1.0, ls="--", alpha=0.75, label=label)
+            ax_e.axvline(tc, color="#F57C00", lw=1.0, ls="--", alpha=0.20, label=label)
             _legend_contact_added = True
 
         ax_e.set_ylabel("Energy (J)", fontsize=9)

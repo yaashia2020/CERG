@@ -31,6 +31,14 @@ class Constraint(ABC):
     kind: ConstraintKind
     name: str
 
+    #: Optional per-constraint body filter: a set/frozenset of robot body
+    #: names this constraint applies to. None (default) = every body. Checked
+    #: by the DSM, the navigation field and CERG.reset q0 validation; bodies
+    #: not in the set are invisible to this constraint. Callers must put
+    #: FULL model body names here (e.g. left_ur_arm_gripper_grasp) — no
+    #: suffix matching happens at this level.
+    body_filter: frozenset[str] | None = None
+
     @abstractmethod
     def signed_distance(self, point: np.ndarray) -> float:
         """Signed distance from a point to the constraint boundary.

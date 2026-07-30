@@ -98,10 +98,17 @@ def _constraint_repulsion(
     for i, body_name in enumerate(body_names):
         body_pos = body_positions[:, i]
 
+        # Jacobian only needed if some constraint actually applies to this body.
+        applicable = [c for c in constraints
+                      if getattr(c, "body_filter", None) is None
+                      or body_name in c.body_filter]
+        if not applicable:
+            continue
+
         J = simulator.get_translational_jacobian(body_name, q=q_v)
         J_pinv = np.linalg.pinv(J)
 
-        for constraint in constraints:
+        for constraint in applicable:
             n = constraint.outward_normal(body_pos)
             dist = constraint.signed_distance(body_pos)
 

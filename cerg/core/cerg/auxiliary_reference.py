@@ -54,7 +54,10 @@ class CERG:
     ):
         self._sim = simulator
         self._robot = robot
-        self._constraints = constraints or []
+        # Keep the CALLER'S list object (no `or []` copy-on-empty): callers
+        # may mutate the list in place mid-run (moving planes, timed
+        # activation gates) and step() must see those changes.
+        self._constraints = constraints if constraints is not None else []
         self._config = config or CERGConfig()
         self._dsm_scale = dsm_scale
 
@@ -86,7 +89,10 @@ class CERG:
             body_names = self._robot.body_names
             body_pos = self._sim.get_all_body_positions(body_names, q=q_v0)  # (3, num_bodies)
             for c in self._constraints:
+                allowed = getattr(c, "body_filter", None)
                 for i, name in enumerate(body_names):
+                    if allowed is not None and name not in allowed:
+                        continue
                     d = c.signed_distance(body_pos[:, i])
                     if d < 0:
                         raise ValueError(
@@ -170,6 +176,6 @@ class CERG:
         self._last_dsm = dsm
         self._last_dsm_report = report
         # 3. ODE Euler step: dq_v/dt = DSM * rho
-        self._q_v = self._q_v + 0.5*dsm * rho * cfg.erg_dt
+        self._q_v = self._q_v + 2.0*dsm * rho * cfg.erg_dt
 
         return self._q_v.copy()
