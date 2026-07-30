@@ -1,10 +1,11 @@
-# CERG configuration for the RRR 3-link planar arm
-# All robot-specific tuning parameters live here.
+# CERG configuration for the Franka Emika Panda (7-DOF arm, no hand)
+# Same structure as rrr_default.yaml; gains and energy band scaled to the
+# Panda's inertia and torque limits.
 
 # ─── Controller gains ───
 # Used by BOTH the actual PD controller AND the CERG prediction loop.
-Kp: [10.0, 10.0, 20.0]
-Kd: [2.0, 2.0, 2.0]
+Kp: [120.0, 120.0, 120.0, 100.0, 50.0, 45.0, 15.0]
+Kd: [15.0, 15.0, 15.0, 9.0, 2.0, 2.0, 1.0]
 
 # ─── CERG prediction ───
 prediction_dt: 0.01        # timestep for Euler integration in predictions
@@ -34,7 +35,7 @@ kappa_hard: 1.0             # scaling for hard constraint DSM
 kappa_energy: 1.0
 
 # ─── Energy constraint ───
-E_max: 1.50
-E_min: 0.2
+E_max: 40.0
+E_min: 20.0
 kappa_delta_s: 1.0          # gain: d(delta_s)/dt = kappa_delta_s * max(E_min - E, 0)
 delta_i: 0.01               # initial value of each per-constraint delta_s (must be > 0)

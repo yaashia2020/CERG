@@ -72,7 +72,7 @@ def _constraint_repulsion(
     simulator: Simulator,
     robot: RobotModel,
     constraints: list[Constraint],
-    scale_fn: Callable[[float, int], float],
+    scale_fn: Callable[[float, int, int], float],
     config: CERGConfig,
 ) -> np.ndarray:
     """Shared repulsion logic for both soft and hard constraints.
@@ -80,10 +80,11 @@ def _constraint_repulsion(
     For each body and each constraint:
       1. FK + Jacobian at q_v
       2. Compute normalized joint-space repulsion direction: J_pinv @ outward_normal
-      3. Call scale_fn(signed_distance, body_index) for the magnitude
+      3. Call scale_fn(signed_distance, body_index, constraint_index) for the magnitude
       4. Accumulate into rho
 
-    scale_fn(dist, body_idx) -> float: returns the scaling factor (>= 0).
+    scale_fn(dist, body_idx, constraint_idx) -> float: returns the scaling factor (>= 0).
+    constraint_idx is the position of the constraint within the passed-in list.
     """
     nv = robot.nv
     eta = config.eta
@@ -94,7 +95,7 @@ def _constraint_repulsion(
 
     body_names = robot.body_names
     body_positions = simulator.get_all_body_positions(body_names, q=q_v)
-    
+
     for i, body_name in enumerate(body_names):
         body_pos = body_positions[:, i]
 
@@ -116,7 +117,7 @@ def _constraint_repulsion(
             qdot_norm = np.linalg.norm(qdot_rep)
             qdot_rep_normalized = qdot_rep / max(qdot_norm, eta)
 
-            scale = scale_fn(dist, i)
+            scale = scale_fn(dist, i, ci)
             rho[:nv] += scale * qdot_rep_normalized[:nv]
 
     return rho
@@ -129,6 +130,7 @@ def compute_navigation_field(
     robot: RobotModel,
     constraints: list[Constraint],
     config: CERGConfig,
+    delta_s_soft: list[float] | None = None,
 ) -> np.ndarray:
     """Compute the total navigation field.
 
@@ -136,6 +138,10 @@ def compute_navigation_field(
 
     Soft: Kp-scaled, active on violation (signed_distance < 0)
     Hard: zeta_w/delta_w-scaled, active when entering influence zone (signed_distance < zeta_w)
+
+    delta_s_soft: optional per-soft-constraint delta_s values (same order as the
+        soft-constraint sublist, i.e. [c for c in constraints if c.kind=="soft"]).
+        When None, falls back to config.delta_s for every soft constraint.
     """
     soft_constraints = [c for c in constraints if c.kind == "soft"]
     hard_constraints = [c for c in constraints if c.kind == "hard"]
@@ -143,19 +149,30 @@ def compute_navigation_field(
     # Soft scale: max(-Kp_i * dist / (delta_s * fd), 0)
     nv = robot.nv
     Kp = np.broadcast_to(np.asarray(config.Kp, dtype=float), (nv,))
-    delta_s = config.delta_s
     fd = config.fd
 
-    def soft_scale(dist: float, body_idx: int) -> float:
+    if delta_s_soft is None:
+        delta_s_soft = [config.delta_s] * len(soft_constraints)
+    elif len(delta_s_soft) != len(soft_constraints):
+        raise ValueError(
+            f"delta_s_soft length {len(delta_s_soft)} != number of soft constraints "
+            f"{len(soft_constraints)}"
+        )
+
+    def soft_scale(dist: float, body_idx: int, constraint_idx: int) -> float:
         kp_i = float(Kp[min(body_idx, len(Kp) - 1)])
-        return max(-kp_i * dist / (delta_s * fd), 0.0)
+        d_s = float(delta_s_soft[constraint_idx])
+        if d_s * fd < 1e-12:
+            return 0.0
+        return max(-kp_i * dist / (d_s * fd), 0.0)
 
     # Hard scale: max((zeta_w - dist) / (zeta_w - delta_w), 0)
     zeta_w = config.zeta_w
     delta_w = config.delta_w
     denom_w = zeta_w - delta_w
 
-    def hard_scale(dist: float, body_idx: int) -> float:
+    def hard_scale(dist: float, body_idx: int, constraint_idx: int) -> float:
+        del body_idx, constraint_idx  # unused; kept for scale_fn signature parity
         if abs(denom_w) < 1e-12:
             return 0.0
         return max((zeta_w - dist) / denom_w, 0.0)

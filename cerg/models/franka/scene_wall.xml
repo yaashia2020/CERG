@@ -1,0 +1,29 @@
+<mujoco model="panda_wall">
+  <!-- Franka E_min press scene: panda_nohand.xml + floor + physical wall.
+       Franka analog of tests/scene_floor.xml (RRR). Lives next to
+       panda_nohand.xml so the included compiler meshdir="assets" resolves. -->
+  <include file="panda_nohand.xml"/>
+
+  <statistic center="0.3 0 0.5" extent="1.4"/>
+
+  <visual>
+    <global offwidth="1280" offheight="960"/>
+  </visual>
+
+  <worldbody>
+    <light name="scene_light" pos="0.5 -1 2" dir="-0.2 0.4 -1" diffuse="0.8 0.8 0.8"/>
+
+    <geom name="floor" type="plane" size="2 2 0.1" pos="0 0 0" rgba="0.8 0.8 0.8 1"
+          contype="1" conaffinity="1"
+          friction="1.0 0.005 0.0001"
+          solref="0.002 1" solimp="0.9 0.95 0.001"/>
+
+    <!-- Physical wall at x=0.5: thin stiff slab spanning y ±1, z 0..1.6.
+         Same contact properties as the floor. -->
+    <geom name="wall" type="box" size="0.005 1.0 0.8" pos="0.5 0 0.8"
+          rgba="0.75 0.2 0.2 0.35"
+          contype="1" conaffinity="1"
+          friction="1.0 0.005 0.0001"
+          solref="0.002 1" solimp="0.9 0.95 0.001"/>
+  </worldbody>
+</mujoco>

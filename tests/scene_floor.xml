@@ -1,0 +1,58 @@
+<mujoco model="rrr_floor">
+  <!-- Arm portion generated with mj_saveLastXML from the URDF-loaded model that
+       passes tests/test_pd_mujoco.py — dynamics identical to that model.
+       Only addition: a floor plane with contact properties, and a light. -->
+  <compiler angle="radian"/>
+
+  <option timestep="0.001"/>
+
+  <worldbody>
+    <light diffuse=".6 .6 .6" pos="0 0 3" dir="0 0 -1"/>
+
+    <!-- Floor at z=0 with explicit contact properties -->
+    <geom name="floor" type="plane" size="2 2 0.1" pos="0 0 0" rgba="0.8 0.8 0.8 1"
+          contype="1" conaffinity="1"
+          friction="1.0 0.005 0.0001"
+          solref="0.002 1" solimp="0.9 0.95 0.001"/>
+
+    <!-- Physical wall at x=0.4: thin stiff slab spanning y ±1, z 0..1.6.
+         Same contact properties as the floor. The arm/tip sphere collide
+         with it; q_v (a reference, not a body) can still plan past it. -->
+    <geom name="wall" type="box" size="0.005 1.0 0.8" pos="0.4 0 0.8"
+          rgba="0.75 0.2 0.2 0.35"
+          contype="1" conaffinity="1"
+          friction="1.0 0.005 0.0001"
+          solref="0.002 1" solimp="0.9 0.95 0.001"/>
+
+    <body name="base_link">
+      <inertial pos="0 0 0" mass="1" diaginertia="0.001 0.001 0.001"/>
+      <body name="link1" pos="0 0 0.05">
+        <inertial pos="0.2 0 0" quat="0.5 0.5 0.5 0.5" mass="2" diaginertia="0.028 0.028 0.001"/>
+        <joint name="joint1" pos="0 0 0" axis="0 1 0" range="-3.14159 3.14159" actuatorfrcrange="-50 50" damping="0.1"/>
+        <geom size="0.03 0.2" pos="0.2 0 0" quat="0.707105 0 0.707108 0" type="cylinder" rgba="0.2 0.4 0.8 1"/>
+        <body name="link2" pos="0.4 0 0">
+          <inertial pos="0.15 0 0" quat="0.5 0.5 0.5 0.5" mass="1.5" diaginertia="0.012 0.012 0.001"/>
+          <joint name="joint2" pos="0 0 0" axis="0 0 1" range="-3.14159 3.14159" actuatorfrcrange="-30 30" damping="0.1"/>
+          <geom size="0.025 0.15" pos="0.15 0 0" quat="0.707105 0 0.707108 0" type="cylinder" rgba="0.2 0.4 0.8 1"/>
+          <body name="link3" pos="0.3 0 0">
+            <inertial pos="0.1 0 0" quat="0.5 0.5 0.5 0.5" mass="1" diaginertia="0.03 0.03 0.002"/>
+            <joint name="joint3" pos="0 0 0" axis="0 0 1" range="-3.14159 3.14159" actuatorfrcrange="-20 20" damping="0.1"/>
+            <geom size="0.02 0.1" pos="0.1 0 0" quat="0.707105 0 0.707108 0" type="cylinder" rgba="0.2 0.4 0.8 1"/>
+            <body name="tip" pos="0.2 0 0">
+              <!-- Contact sphere: lets the tip physically touch floor/wall
+                   (needed for the E_min scenario). Radius matches link3's
+                   cylinder (0.02). Explicit contact properties so tip
+                   contacts are well-conditioned and detectable.
+                   tip<->link3 contact is auto-excluded (parent-child). -->
+              <geom name="tip_sphere" type="sphere" size="0.02" mass="0.001"
+                    rgba="1 0.6 0 1"
+                    contype="1" conaffinity="1"
+                    friction="1.0 0.005 0.0001"
+                    solref="0.002 1" solimp="0.9 0.95 0.001"/>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

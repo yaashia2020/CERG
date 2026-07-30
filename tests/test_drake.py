@@ -148,12 +148,22 @@ class TestStep:
             state = sim.step(np.zeros(3))
         assert_allclose(state.t, n * DT, atol=1e-10)
 
-    def test_torque_clipping(self, sim, robot):
-        """Applying torques beyond limits should still work (clipped internally)."""
+    def test_no_torque_clipping(self, sim, robot):
+        """The plant applies torque unclipped; limits are the CERG governor's
+        responsibility, not the simulator's."""
+        # Stepping at the limit vs far beyond it must produce different motion.
+        # If torque were clipped to tau_max, both rollouts would be identical.
         sim.reset()
-        huge_tau = robot.tau_max * 100
-        state = sim.step(huge_tau)
-        assert state.q.shape == (3,)
+        for _ in range(5):
+            sim.step(robot.tau_max)
+        q_at_limit = sim.get_state().q.copy()
+
+        sim.reset()
+        for _ in range(5):
+            sim.step(robot.tau_max * 100)
+        q_unclipped = sim.get_state().q.copy()
+
+        assert not np.allclose(q_at_limit, q_unclipped)
 
     def test_gravity_causes_motion(self, sim):
         """With zero torque, gravity should cause the arm to move."""

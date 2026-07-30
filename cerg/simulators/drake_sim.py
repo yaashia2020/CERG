@@ -199,9 +199,12 @@ class DrakeSimulator(Simulator):
         return self.get_state()
 
     def step(self, tau: np.ndarray) -> RobotState:
-        tau_clipped = np.clip(tau, -self._robot.tau_max, self._robot.tau_max)
+        # No torque clipping: torque/limit constraints are enforced internally
+        # by the CERG governor, not the plant. The simulator applies whatever
+        # torque it is given so any constraint violation stays observable.
+        tau = np.asarray(tau, dtype=float)
         actuation_port = self._plant.get_actuation_input_port()
-        actuation_port.FixValue(self._plant_context, tau_clipped)
+        actuation_port.FixValue(self._plant_context, tau)
 
         target_time = self._context.get_time() + self._dt
         self._sim.AdvanceTo(target_time)

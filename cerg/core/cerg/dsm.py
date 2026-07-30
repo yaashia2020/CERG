@@ -166,10 +166,10 @@ def predict_trajectory(
         g = simulator.get_gravity_vector(q)
 
         tau = Kp * (q_v[:nv] - q[:nv]) - Kd * qd[:nv] + g[:nv]
-        
+
         rhs = tau - c - g
         qdd = np.linalg.solve(M, rhs)
-        # print("qdd at step {}: {}".format(k, qdd))
+
         qd = qd + qdd * pred_dt
         q = q + qd * pred_dt
 
