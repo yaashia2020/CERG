@@ -55,7 +55,7 @@ class CERGConfig:
             "robust_delta_tau": 0.0, "robust_delta_q": 0.0, "robust_delta_dq": 0.0,
             "kappa_tau": 1.0, "kappa_q": 1.0, "kappa_dq": 1.0,
             "kappa_soft": 1.0, "kappa_hard": 1.0, "kappa_energy": 1.0,
-            "kappa_delta_s": 1.0, "delta_i": 0.01,
+            "kappa_delta_s": 2.0, "delta_i": 0.01,
             "E_max": 0.5, "E_min": 0.0,
         }
         for key in self._FLOAT_FIELDS:

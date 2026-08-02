@@ -61,20 +61,16 @@ class CERG:
         self._config = config or CERGConfig()
         self._dsm_scale = dsm_scale
 
-        # Indices (into self._constraints) of soft constraints; order matches
-        # the sublist passed to compute_navigation_field, so the per-constraint
-        # delta_s list stays aligned.
-        self._soft_indices: list[int] = [
-            i for i, c in enumerate(self._constraints) if c.kind == "soft"
-        ]
-
         # State
         self._q_v: np.ndarray | None = None
 
         # Per-soft-constraint delta_s (dynamic; monotonically grows when E < E_min,
         # capped by the world-frame signed distance of fk(q_r, tip) to that
-        # constraint). Order matches self._soft_indices.
-        self._delta_s: list[float] = []
+        # constraint). Keyed by id(constraint) because the caller may mutate the
+        # constraint list in place mid-run (timed activation gates): membership
+        # is recomputed every step, surviving constraints keep their grown
+        # value, newly added ones seed at delta_i, removed ones are dropped.
+        self._delta_s_by_id: dict[int, float] = {}
 
         # Last computed values (for logging / debugging)
         self._last_dsm: float = 0.0
@@ -114,7 +110,7 @@ class CERG:
                         )
 
         self._q_v = q_v0
-        self._delta_s = [self._config.delta_i for _ in self._soft_indices]
+        self._delta_s_by_id = {}
         self._last_dsm = 0.0
         self._last_dsm_report = None
         self._last_rho = None
@@ -162,7 +158,8 @@ class CERG:
     @property
     def delta_s(self) -> list[float]:
         """Current per-soft-constraint delta_s values (in soft-constraint order)."""
-        return list(self._delta_s)
+        return [self._delta_s_by_id.get(id(c), self._config.delta_i)
+                for c in self._constraints if c.kind == "soft"]
 
     def step(self, q: np.ndarray, qd: np.ndarray, q_r: np.ndarray) -> np.ndarray:
         """Compute one ERG step: update q_v and return it.
@@ -194,18 +191,27 @@ class CERG:
         # 0b. Per-soft-constraint delta_s evolution:
         #        d(delta_s)/dt = kappa_delta_s * max(E_min - E, 0)     (monotone ↑)
         #     capped by r = signed_distance(fk(q_r, tip), constraint)  (per constraint)
-        if self._soft_indices:
+        # Soft membership is recomputed here every step: the caller may add or
+        # remove constraints from the list in place (timed activation gates).
+        soft = [c for c in self._constraints if c.kind == "soft"]
+        if soft:
             deficit = max(cfg.E_min - energy, 0.0)
             delta_grow = cfg.kappa_delta_s * deficit * cfg.erg_dt
             tip = self._robot.end_effectors[0]
             tip_at_qr = self._sim.get_all_body_positions([tip], q=q_r)[:, 0]
-            for k, ci in enumerate(self._soft_indices):
-                self._delta_s[k] += delta_grow
+            for c in soft:
+                d = self._delta_s_by_id.get(id(c), cfg.delta_i) + delta_grow
                 # CAP DISABLED (per current experiments). When enabled it bounds
                 # delta_s to [delta_i, r], r = |dist(fk(tip, q_r), plane)|:
-                # r_k = abs(float(self._constraints[ci].signed_distance(tip_at_qr)))
-                # self._delta_s[k] = max(cfg.delta_i, min(self._delta_s[k], r_k))
-                _ = ci
+                # r = abs(float(c.signed_distance(tip_at_qr)))
+                # d = max(cfg.delta_i, min(d, r))
+                self._delta_s_by_id[id(c)] = d
+            # Drop entries for gated-out constraints: a constraint that later
+            # re-activates restarts at delta_i, and stale ids never linger.
+            live_ids = {id(c) for c in soft}
+            self._delta_s_by_id = {
+                k: v for k, v in self._delta_s_by_id.items() if k in live_ids
+            }
 
         # 1. Navigation field (direction)
         rho = compute_navigation_field(
@@ -215,7 +221,7 @@ class CERG:
             robot=self._robot,
             constraints=self._constraints,
             config=cfg,
-            delta_s_soft=self._delta_s if self._soft_indices else None,
+            delta_s_soft=[self._delta_s_by_id[id(c)] for c in soft] if soft else None,
         )
         self._last_rho = rho
 
@@ -233,6 +239,6 @@ class CERG:
         self._last_dsm = dsm
         self._last_dsm_report = report
         # 3. ODE Euler step: dq_v/dt = DSM * rho
-        self._q_v = self._q_v + 2.0*dsm * rho * cfg.erg_dt
+        self._q_v = self._q_v + (1.5 * dsm) * rho * cfg.erg_dt
 
         return self._q_v.copy()

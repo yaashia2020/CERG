@@ -287,6 +287,7 @@ class CERGHistory:
         title: str | None = None,
         constraints: list | None = None,
         E_max: float | None = None,
+        E_min: float | None = None,
         ee_ref: dict | None = None,
         show: bool = True,
     ) -> list:
@@ -308,6 +309,9 @@ class CERGHistory:
                             dashed lines on the end-effector position figure
         E_max             : energy limit (e.g. config.E_max) — drawn as a
                             horizontal dashed line on the energy panel
+        E_min             : energy floor (e.g. config.E_min) — drawn as a
+                            horizontal dashed line on the energy panel;
+                            omitted when None or 0 (mechanism off)
         ee_ref            : dict mapping end-effector name → (3,) world position
                             of the goal reference r — drawn as a dotted line on
                             that end-effector's row
@@ -350,7 +354,7 @@ class CERGHistory:
             ),
             _fig_dsm_energy(
                 t, self.dsm, self.energy, self.soft_contact_times,
-                E_max, _mk_title("DSM & Energy"),
+                E_max, E_min, _mk_title("DSM & Energy"),
             ),
         ]
 
@@ -688,7 +692,7 @@ def _fig_end_effector_positions(t, ee_data, constraints, suptitle, ee_ref=None):
     return fig
 
 
-def _fig_dsm_energy(t, dsm, energy, contact_times, E_max, suptitle):
+def _fig_dsm_energy(t, dsm, energy, contact_times, E_max, E_min, suptitle):
     """Figure 4: DSM area chart + optional energy area chart with contact markers."""
     import matplotlib.pyplot as plt
 
@@ -725,6 +729,12 @@ def _fig_dsm_energy(t, dsm, energy, contact_times, E_max, suptitle):
         if E_max is not None:
             ax_e.axhline(E_max, color="#d32f2f", lw=1.2, ls="--", alpha=0.9,
                          label=f"E_max = {E_max}")
+
+        # E_min floor line — skipped at 0, where the mechanism is off and the
+        # line would sit on the axis baseline.
+        if E_min:
+            ax_e.axhline(E_min, color="#7B1FA2", lw=1.2, ls="--", alpha=0.9,
+                         label=f"E_min = {E_min}")
 
         # Vertical lines at first contact and all subsequent contacts
         _legend_contact_added = False

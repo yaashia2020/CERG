@@ -100,7 +100,9 @@ def _constraint_repulsion(
         body_pos = body_positions[:, i]
 
         # Jacobian only needed if some constraint actually applies to this body.
-        applicable = [c for c in constraints
+        # Keep each constraint's index in the passed-in list — scale_fn's
+        # constraint_idx contract (delta_s_soft is indexed in that order).
+        applicable = [(ci, c) for ci, c in enumerate(constraints)
                       if getattr(c, "body_filter", None) is None
                       or body_name in c.body_filter]
         if not applicable:
@@ -109,7 +111,7 @@ def _constraint_repulsion(
         J = simulator.get_translational_jacobian(body_name, q=q_v)
         J_pinv = np.linalg.pinv(J)
 
-        for constraint in applicable:
+        for ci, constraint in applicable:
             n = constraint.outward_normal(body_pos)
             dist = constraint.signed_distance(body_pos)
 

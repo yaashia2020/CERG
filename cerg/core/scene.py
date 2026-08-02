@@ -58,6 +58,9 @@ class JointSetScene:
     # E_max; a value here overrides it for THIS joint set (e.g. a push task
     # that needs a bigger budget than free-space motion).
     E_max: float | None = None
+    # Scenario-specific energy floor (J). None = keep the tuning config's
+    # E_min; a value here overrides it for THIS joint set.
+    E_min: float | None = None
 
     @property
     def nq(self) -> int:
@@ -90,6 +93,8 @@ def load_scene_config(
               kind: soft                   # soft | hard
           E_max: 8.0                       # optional energy budget (J) — overrides
                                            # the tuning config's E_max for this set
+          E_min: 2.0                       # optional energy floor (J) — overrides
+                                           # the tuning config's E_min for this set
 
         right_arm:
           joint_names: [...]
@@ -188,6 +193,21 @@ def _parse_set(
         if not np.isfinite(e_max) or e_max <= 0:
             raise ValueError(f"{where}.E_max: must be finite and > 0, got {e_max}")
 
+    e_min: float | None = None
+    if "E_min" in entry:
+        try:
+            e_min = float(entry["E_min"])
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"{where}.E_min: must be a number, got {entry['E_min']!r}"
+            ) from None
+        if not np.isfinite(e_min) or e_min < 0:
+            raise ValueError(f"{where}.E_min: must be finite and >= 0, got {e_min}")
+        if e_max is not None and e_min >= e_max:
+            raise ValueError(
+                f"{where}.E_min: must be < E_max ({e_max}), got {e_min}"
+            )
+
     # Reorder yaml arrays from yaml_names order to want_order.
     yaml_idx = {n: i for i, n in enumerate(yaml_names)}
     perm = [yaml_idx[n] for n in want_order]
@@ -199,6 +219,7 @@ def _parse_set(
         constraints=constraints,
         q_target_schedule=schedule,
         E_max=e_max,
+        E_min=e_min,
     )
 
 
