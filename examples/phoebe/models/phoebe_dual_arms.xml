@@ -13,11 +13,13 @@
                right_shoulder_pan, right_shoulder_lift, right_elbow,
                right_wrist_1, right_wrist_2, right_wrist_3
 
-  Arms are mounted at their nominal world positions with the lift
-  columns fixed at h = 0.24 m (the initial_value from the ROS 2
-  control config), so:
-    left  mount origin : (0,  0.201, 0.85)
-    right mount origin : (0, -0.201, 0.85)
+  Arms are mounted at their nominal world positions. The original mounts
+  (0, +/-0.201, 0.85) assumed lift columns at h = 0.24 m and sat ~0.35 m
+  ABOVE the hardware URDF chain (world -> tool0 TF) — calibrated 2026-08-01
+  against live TF, translation-only (base rotation untouched, so joint-space
+  dynamics are unchanged):
+    left  mount origin : (-0.02038,   0.196721, 0.497936)
+    right mount origin : (-0.019145, -0.188738, 0.482561)
 
   No actuator elements — CERG applies torques via mj_data.qfrc_applied.
 -->
@@ -32,7 +34,7 @@
 
   <worldbody>
     <!-- ─── LEFT ARM MOUNT (lift column fixed at h=0.24 m) ─── -->
-    <body name="left_arm_mount" pos="0 0.201 0.85">
+    <body name="left_arm_mount" pos="-0.02038 0.196721 0.497936">
 
       <body name="left_ur_arm_shoulder_link"
             pos="0.0126802 0.124615 0.463459"
@@ -123,7 +125,7 @@
     </body>
 
     <!-- ─── RIGHT ARM MOUNT (lift column fixed at h=0.24 m) ─── -->
-    <body name="right_arm_mount" pos="0 -0.201 0.85">
+    <body name="right_arm_mount" pos="-0.019145 -0.188738 0.482561">
 
       <body name="right_ur_arm_shoulder_link"
             pos="0.0147855 -0.128643 0.461404"

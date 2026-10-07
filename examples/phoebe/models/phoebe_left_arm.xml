@@ -84,7 +84,11 @@
     <mesh file="full/wrist3/wrist3.obj" scale="1.0 1.0 1.0" />
   </asset>
   <worldbody>
-    <body name="left_ur_arm_shoulder_link_mount" pos="0 0.201 0.85" quat="1 0 0 0">
+    <!-- Mount pos calibrated 2026-08-01 against live TF (world->left_tool0):
+         the original pos (0, 0.201, 0.85) sat 352.7 mm off the hardware URDF
+         chain (mostly +z). Translation-only fix: base ROTATION untouched, so
+         joint-space dynamics (M, g, c -> DSM, energy) are bit-identical. -->
+    <body name="left_ur_arm_shoulder_link_mount" pos="-0.02038 0.196721 0.497936" quat="1 0 0 0">
       <body name="left_ur_arm_shoulder_link" pos="0.0126802 0.124615 0.463459" quat="0.353086 -0.134633 0.350748 0.856843">
         <inertial pos="0 -0.00193 -0.02561" quat="0.560239 0.250606 -0.316559 0.72327" mass="3.761" diaginertia="0.00703079 0.0070003 0.00602478" />
         <joint name="left_ur_arm_shoulder_pan_joint" pos="0 0 0" axis="0 0 1" range="-6.28319 6.28319" actuatorfrcrange="-150 150" />
@@ -149,7 +153,12 @@
                     <inertial pos="0 0 0" mass="1e-6" diaginertia="1e-9 1e-9 1e-9" />
                     <geom type="sphere" size="0.01" rgba="0.2 0.6 1 1" contype="0" conaffinity="0" group="2" />
                   </body>
-                  <body name="left_ur_arm_gripper_grasp" pos="0 0 0.192">
+                  <!-- Grasp offset calibrated 2026-08-01: real gripper is a
+                       Robotiq 2F adaptive (S/N C-41241), not the Hand-E these
+                       meshes show. Press test with the 0.192 offset stopped
+                       18 mm short of the surface, so the real fingertip sits
+                       CLOSER to the flange: 0.192 - 0.018 = 0.174. -->
+                  <body name="left_ur_arm_gripper_grasp" pos="0 0 0.174">
                     <inertial pos="0 0 0" mass="1e-6" diaginertia="1e-9 1e-9 1e-9" />
                     <geom type="sphere" size="0.01" rgba="0.2 1 0.4 1" contype="0" conaffinity="0" group="2" />
                   </body>

@@ -84,7 +84,11 @@
     <mesh file="full/wrist3/wrist3.obj" scale="1.0 1.0 1.0" />
   </asset>
   <worldbody>
-    <body name="right_ur_arm_shoulder_link_mount" pos="0 -0.201 0.85" quat="1 0 0 0">
+    <!-- Mount pos calibrated 2026-08-01 against live TF (world->right_tool0):
+         the original pos (0, -0.201, 0.85) sat 368.1 mm off the hardware URDF
+         chain (mostly +z). Translation-only fix: base ROTATION untouched, so
+         joint-space dynamics (M, g, c -> DSM, energy) are bit-identical. -->
+    <body name="right_ur_arm_shoulder_link_mount" pos="-0.019145 -0.188738 0.482561" quat="1 0 0 0">
       <body name="right_ur_arm_shoulder_link" pos="0.0147855 -0.128643 0.461404" quat="0.857772 0.353915 -0.131976 0.348645">
         <inertial pos="0 -0.00193 -0.02561" quat="0.560239 0.250606 -0.316559 0.72327" mass="3.761" diaginertia="0.00703079 0.0070003 0.00602478" />
         <joint name="right_ur_arm_shoulder_pan_joint" pos="0 0 0" axis="0 0 1" range="-6.28319 6.28319" actuatorfrcrange="-150 150" />
@@ -149,7 +153,11 @@
                     <inertial pos="0 0 0" mass="1e-6" diaginertia="1e-9 1e-9 1e-9" />
                     <geom type="sphere" size="0.01" rgba="0.2 0.6 1 1" contype="0" conaffinity="0" group="2" />
                   </body>
-                  <body name="right_ur_arm_gripper_grasp" pos="0 0 0.192">
+                  <!-- Grasp offset matched to the left arm's 2026-08-01 2F
+                       calibration (0.192 - 0.018 = 0.174; Hand-E meshes are
+                       wrong, real gripper is a Robotiq 2F adaptive). NOT yet
+                       press-verified on this arm — re-measure before trusting. -->
+                  <body name="right_ur_arm_gripper_grasp" pos="0 0 0.174">
                     <inertial pos="0 0 0" mass="1e-6" diaginertia="1e-9 1e-9 1e-9" />
                     <geom type="sphere" size="0.01" rgba="0.2 1 0.4 1" contype="0" conaffinity="0" group="2" />
                   </body>
