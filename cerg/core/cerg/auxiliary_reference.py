@@ -239,6 +239,6 @@ class CERG:
         self._last_dsm = dsm
         self._last_dsm_report = report
         # 3. ODE Euler step: dq_v/dt = DSM * rho
-        self._q_v = self._q_v + (1.5 * dsm) * rho * cfg.erg_dt
+        self._q_v = self._q_v + (1.0 * dsm) * rho * cfg.erg_dt
 
         return self._q_v.copy()
