@@ -16,6 +16,9 @@ dependencies = [
 [project.optional-dependencies]
 drake = ["drake"]
 mujoco = ["mujoco>=3.0"]
+# GPU (MJX) path.  Needs a CUDA build of jax: on Blackwell parts (sm_120,
+# e.g. RTX 5090) that means CUDA 12.8+, which jax[cuda12] wheels provide.
+gpu = ["mujoco-mjx>=3.0", "jax[cuda12]>=0.4.35"]
 all = ["drake", "mujoco>=3.0"]
 dev = ["pytest", "pytest-cov", "ruff"]
 

@@ -30,6 +30,7 @@ build/
 examples/h12/plots/
 
 # Auto-generated run outputs
+examples/rrr/plots/
 examples/franka/plots/
 examples/franka/videos/
 baselines/results/
