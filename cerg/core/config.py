@@ -31,8 +31,13 @@ class CERGConfig:
         "eta", "zeta_q", "delta_q", "delta_s", "fd", "zeta_w", "delta_w",
         "robust_delta_tau", "robust_delta_q", "robust_delta_dq",
         "kappa_tau", "kappa_q", "kappa_dq", "kappa_soft", "kappa_hard", "kappa_energy",
-        "E_max",
+        "kappa_delta_s", "delta_i", "kappa_delta_s_down", "eps_E",
+        "E_max", "E_min",
     }
+    # delta_s_contact_gate: grow delta_s (E_min law) only while the arm is
+    # inside a soft constraint.  Off keeps the original law, which also grows
+    # delta_s during free-space approach.
+    _BOOL_FIELDS = {"delta_s_contact_gate"}
     _REQUIRED = {"Kp", "Kd"}
 
     def __init__(self, **kwargs):
@@ -54,10 +59,16 @@ class CERGConfig:
             "robust_delta_tau": 0.0, "robust_delta_q": 0.0, "robust_delta_dq": 0.0,
             "kappa_tau": 1.0, "kappa_q": 1.0, "kappa_dq": 1.0,
             "kappa_soft": 1.0, "kappa_hard": 1.0, "kappa_energy": 1.0,
-            "E_max": 0.5
+            "kappa_delta_s": 1.0, "kappa_delta_s_down": 0.0, "eps_E": 0.0,
+            "E_max": 0.5, "E_min": 0.0,
         }
+        # delta_i (initial per-soft-constraint delta_s) defaults to delta_s so
+        # that E_min = 0 reproduces the static-delta_s behaviour exactly.
+        _defaults["delta_i"] = float(kwargs.get("delta_s", _defaults["delta_s"]))
         for key in self._FLOAT_FIELDS:
             setattr(self, key, float(kwargs.get(key, _defaults[key])))
+        for key in self._BOOL_FIELDS:
+            setattr(self, key, bool(kwargs.get(key, False)))
 
     @property
     def num_pred_steps(self) -> int:

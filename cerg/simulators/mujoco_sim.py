@@ -34,6 +34,13 @@ def _load_mujoco_model(robot: RobotModel) -> "mujoco.MjModel":
     """
     import re
 
+    # Optional hook: a robot may edit its MJCF before compiling (e.g. add a
+    # contact tip to a vendored model without modifying the file).
+    spec_fn = getattr(robot, "mjcf_spec", None)
+    spec = spec_fn() if callable(spec_fn) else None
+    if spec is not None:
+        return spec.compile()
+
     mjcf_path = robot.mjcf_path()
     if mjcf_path is not None:
         return mujoco.MjModel.from_xml_path(str(mjcf_path))

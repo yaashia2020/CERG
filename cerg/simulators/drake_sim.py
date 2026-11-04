@@ -289,38 +289,42 @@ class DrakeSimulator(Simulator):
         panel_size: float = 2.0,
         thickness: float = 0.005,
     ) -> None:
-        """Draw constraints as translucent panels in Meshcat.
+        """Draw constraints as translucent shapes in Meshcat.
 
         No-op when visualize=False.  Hard constraints are red, soft are
-        yellow.  Currently handles HalfSpaceConstraint only; unknown
+        yellow.  HalfSpaceConstraint is drawn as a panel on the boundary
+        plane, SphereConstraint as a sphere at its centre.  Unknown
         constraint types are skipped silently.
 
         Parameters
         ----------
         constraints : list of Constraint
-        panel_size  : width and height of the visual panel (metres)
-        thickness   : depth of the panel (metres)
+        panel_size  : width and height of a half-space panel (metres)
+        thickness   : depth of a half-space panel (metres)
         """
         if self._meshcat is None:
             return
 
-        from pydrake.geometry import Box, Rgba
+        from pydrake.geometry import Box, Rgba, Sphere
         from pydrake.math import RigidTransform
 
         for idx, c in enumerate(constraints):
-            if not (hasattr(c, "normal") and hasattr(c, "offset")):
+            if hasattr(c, "center") and hasattr(c, "radius"):
+                shape = Sphere(float(c.radius))
+                X     = RigidTransform(np.asarray(c.center, dtype=float))
+            elif hasattr(c, "normal") and hasattr(c, "offset"):
+                n      = np.asarray(c.normal, dtype=float)
+                center = float(c.offset) * n
+                shape  = Box(panel_size, panel_size, thickness)
+                X      = RigidTransform(_rotation_z_to(n), center)
+            else:
                 continue  # skip unsupported constraint types
 
-            n      = np.asarray(c.normal, dtype=float)
-            center = float(c.offset) * n
-            R      = _rotation_z_to(n)
-            color  = (Rgba(0.9, 0.1, 0.1, 0.25) if c.kind == "hard"
-                      else Rgba(0.9, 0.8, 0.1, 0.25))
-            path   = f"/cerg_constraints/{c.kind}_{idx}"
-            self._meshcat.SetObject(
-                path, Box(panel_size, panel_size, thickness), color
-            )
-            self._meshcat.SetTransform(path, RigidTransform(R, center))
+            color = (Rgba(0.9, 0.1, 0.1, 0.25) if c.kind == "hard"
+                     else Rgba(0.9, 0.8, 0.1, 0.25))
+            path  = f"/cerg_constraints/{c.kind}_{idx}"
+            self._meshcat.SetObject(path, shape, color)
+            self._meshcat.SetTransform(path, X)
 
     def draw_goal(
         self,

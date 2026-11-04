@@ -1,0 +1,27 @@
+Adaptive energy band [E_min, E_max] -- equations for PowerPoint
+(Insert -> Equation -> LaTeX mode, paste one line, Convert)
+
+Energy
+E=\frac{1}{2}\dot{q}^T M(q)\dot{q}+\frac{1}{2}(q_v-q)^T K_p(q_v-q)
+
+Soft repulsion (d = penetration depth)
+\rho_s=\frac{K_{p,i}\,d}{\delta_s f_d}
+
+E_min: delta_s grows
+\dot{\delta}_s=\kappa_{\delta_s}\max(E_{min}-E,\,0)
+
+E_max tightened: delta_s shrinks
+\dot{\delta}_s=\kappa_{\delta_s}^{\downarrow}\min(E_{max}-E,\,0),\qquad \delta_s\ge\delta_i
+
+Latch on / off
+on:  E_{max}^{+}<E_{max}^{-}\ \wedge\ E>E_{max}^{+}
+off: E+\varepsilon_E<E_{max}
+
+DSM energy term
+\Delta_E=\max\left(\kappa_s d_{soft},\ \kappa_E(\bar{E}_{max}-E)\right)
+\bar{E}_{max}=E_{max}^{-}  while latched,  E_{max}  otherwise
+
+ERG update
+\dot{q}_v=\Delta(q,\dot{q},q_v)\,\rho(q_v,q_r)
+
+Notation: E_max^- = E_max before the drop, E_max^+ = after.

@@ -47,6 +47,10 @@ class RRRRobot(RobotModel):
     def end_effectors(self) -> list[str]:
         return ["tip"]
 
+    @property
+    def link_segments(self) -> list[tuple[str, str]]:
+        return [("link1", "link2"), ("link2", "link3"), ("link3", "tip")]
+
     def urdf_path(self) -> Path | None:
         p = _MODELS_DIR / "rrr.urdf"
         return p if p.exists() else None

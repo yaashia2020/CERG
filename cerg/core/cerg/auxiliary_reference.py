@@ -56,13 +56,33 @@ class CERG:
         self._constraints = constraints or []
         self._config = config or CERGConfig()
 
+        # Indices (into self._constraints) of soft constraints; order matches
+        # the sublist the navigation field builds, so delta_s stays aligned.
+        self._soft_indices: list[int] = [
+            i for i, c in enumerate(self._constraints) if c.kind == "soft"
+        ]
+
         # State
         self._q_v: np.ndarray | None = None
+
+        # Per-soft-constraint delta_s (dynamic; grows monotonically while
+        # E < E_min).  Order matches self._soft_indices.
+        self._delta_s: list[float] = []
+
+        # E_max-tighten retraction latch: set when config.E_max drops below its
+        # previous value while E > E_max; cleared once E < E_max. While latched
+        # the DSM keeps enforcing the pre-drop E_max (_dsm_E_max) so q_v stays
+        # mobile and the shrinking delta_s can retract it; config.E_max (the
+        # new, lower cap) drives the retraction law and the release condition.
+        self._prev_E_max: float | None = None
+        self._retract_active: bool = False
+        self._dsm_E_max: float | None = None
 
         # Last computed values (for logging / debugging)
         self._last_dsm: float = 0.0
         self._last_dsm_breakdown: dict | None = None
         self._last_rho: np.ndarray | None = None
+        self._last_energy: float = 0.0
 
     @property
     def config(self) -> CERGConfig:
@@ -79,6 +99,7 @@ class CERG:
         if self._constraints:
             body_names = self._robot.body_names
             body_pos = self._sim.get_all_body_positions(body_names, q=q_v0)  # (3, num_bodies)
+            segments = self._robot.link_segment_indices
             for c in self._constraints:
                 for i, name in enumerate(body_names):
                     d = c.signed_distance(body_pos[:, i])
@@ -87,10 +108,27 @@ class CERG:
                             f"Initial configuration violates {c.kind} constraint: "
                             f"body '{name}' signed distance {d:.4f} < 0"
                         )
+                for ia, ib in segments:
+                    pt, lam = c.segment_closest_point(body_pos[:, ia], body_pos[:, ib])
+                    if not (0.0 < lam < 1.0):
+                        continue
+                    d = c.signed_distance(pt)
+                    if d < 0:
+                        raise ValueError(
+                            f"Initial configuration violates {c.kind} constraint: "
+                            f"link '{body_names[ia]}'->'{body_names[ib]}' at lam={lam:.2f} "
+                            f"signed distance {d:.4f} < 0"
+                        )
 
         self._q_v = q_v0
+        self._delta_s = [self._config.delta_i for _ in self._soft_indices]
+        self._prev_E_max = None
+        self._retract_active = False
+        self._dsm_E_max = self._config.E_max
         self._last_dsm = 0.0
+        self._last_dsm_breakdown = None
         self._last_rho = None
+        self._last_energy = 0.0
 
     @property
     def q_v(self) -> np.ndarray:
@@ -121,6 +159,42 @@ class CERG:
         """Last computed navigation field (for debugging / logging)."""
         return self._last_rho.copy() if self._last_rho is not None else None
 
+    @property
+    def last_energy(self) -> float:
+        """Total energy E = 0.5 qd^T M qd + 0.5 (q_v-q)^T Kp (q_v-q) at the
+        last step, computed the same way as dsm.predict_trajectory."""
+        return self._last_energy
+
+    @property
+    def delta_s(self) -> list[float]:
+        """Current per-soft-constraint delta_s values (in soft-constraint order)."""
+        return list(self._delta_s)
+
+    @property
+    def emax_retract_active(self) -> bool:
+        """True while the E_max-tighten retraction law is shrinking delta_s."""
+        return self._retract_active
+
+    @property
+    def dsm_E_max(self) -> float | None:
+        """The E_max the DSM is currently enforcing (lags config.E_max during
+        an E_max-tighten transition until E is within the new limit)."""
+        return self._dsm_E_max
+
+    def _arm_in_soft(self, q: np.ndarray) -> bool:
+        """True when a tracked body or link-segment point of the arm at q is
+        inside a soft constraint (signed distance <= 0)."""
+        pos = self._sim.get_all_body_positions(self._robot.body_names, q=q)
+        for i in self._soft_indices:
+            c = self._constraints[i]
+            if any(c.signed_distance(pos[:, b]) <= 0.0 for b in range(pos.shape[1])):
+                return True
+            for ia, ib in self._robot.link_segment_indices:
+                pt, lam = c.segment_closest_point(pos[:, ia], pos[:, ib])
+                if 0.0 < lam < 1.0 and c.signed_distance(pt) <= 0.0:
+                    return True
+        return False
+
     def step(self, q: np.ndarray, qd: np.ndarray, q_r: np.ndarray) -> np.ndarray:
         """Compute one ERG step: update q_v and return it.
 
@@ -138,6 +212,55 @@ class CERG:
             raise RuntimeError("ERG not initialized. Call reset(q_v0) first.")
 
         cfg = self._config
+        nv = self._robot.nv
+
+        # 0. Current energy (same formula as dsm.predict_trajectory):
+        #    E = 0.5 qd^T M(q) qd  +  0.5 (q_v - q)^T diag(Kp) (q_v - q)
+        M = self._sim.get_mass_matrix(q)
+        Kp = np.broadcast_to(np.asarray(cfg.Kp, dtype=float), (nv,))
+        pos_err = self._q_v[:nv] - q[:nv]
+        energy = float(0.5 * qd[:nv] @ M @ qd[:nv] + 0.5 * pos_err @ np.diag(Kp) @ pos_err)
+        self._last_energy = energy
+
+        # 0b. Per-soft-constraint delta_s evolution:
+        #        d(delta_s)/dt = kappa_delta_s * max(E_min - E, 0)     (monotone ↑)
+        #     CAP DISABLED (as on main).  When enabled it bounds delta_s to
+        #     [delta_i, r], r = |signed_distance(fk(q_r, tip), constraint)|.
+        #     With config.delta_s_contact_gate the growth is held at zero until
+        #     the arm itself is inside a soft constraint, so delta_s is still at
+        #     delta_i when contact starts.
+        if self._soft_indices:
+            delta_grow = cfg.kappa_delta_s * max(cfg.E_min - energy, 0.0) * cfg.erg_dt
+            if delta_grow > 0.0 and cfg.delta_s_contact_gate and not self._arm_in_soft(q):
+                delta_grow = 0.0
+            for k in range(len(self._delta_s)):
+                self._delta_s[k] += delta_grow
+
+        # 0c. E_max-tighten retraction (latched):
+        #     On a detected drop of config.E_max while E > E_max, shrink delta_s:
+        #         d(delta_s)/dt = kappa_delta_s_down * min(E_max - E, 0)
+        #     floored at delta_i. The strengthened soft repulsion retracts q_v,
+        #     decompressing the virtual spring until E < E_max; then the latch
+        #     releases, delta_s stays where it ended, and the DSM enforces E_max
+        #     as before (the E_min law regrows delta_s if the press resumes).
+        if (
+            self._prev_E_max is not None
+            and cfg.E_max < self._prev_E_max
+            and energy > cfg.E_max
+        ):
+            self._retract_active = True   # _dsm_E_max keeps the pre-drop value
+        # Hand enforcement to the new E_max only once E has eps_E of headroom
+        # below it — switching at the boundary would start the new-cap DSM at
+        # ~0 (kappa_energy * (E_max - E) ~ 0) with q_v nearly frozen.
+        if self._retract_active and energy + cfg.eps_E < cfg.E_max:
+            self._retract_active = False
+        if not self._retract_active:
+            self._dsm_E_max = cfg.E_max
+        if self._retract_active and self._soft_indices:
+            shrink = cfg.kappa_delta_s_down * min(cfg.E_max - energy, 0.0) * cfg.erg_dt
+            for k in range(len(self._delta_s)):
+                self._delta_s[k] = max(cfg.delta_i, self._delta_s[k] + shrink)
+        self._prev_E_max = cfg.E_max
 
         # 1. Navigation field (direction)
         rho = compute_navigation_field(
@@ -147,6 +270,7 @@ class CERG:
             robot=self._robot,
             constraints=self._constraints,
             config=cfg,
+            delta_s_soft=self._delta_s if self._soft_indices else None,
         )
         self._last_rho = rho
 
@@ -159,6 +283,7 @@ class CERG:
             robot=self._robot,
             constraints=self._constraints,
             config=cfg,
+            E_max_override=self._dsm_E_max,
         )
         self._last_dsm = dsm
         self._last_dsm_breakdown = breakdown

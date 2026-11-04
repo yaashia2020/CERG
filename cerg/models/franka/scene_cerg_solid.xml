@@ -1,0 +1,23 @@
+<mujoco model="panda cerg scene, solid obstacle">
+  <!-- scene_cerg.xml plus ONE real obstacle: a static sphere with collision.
+
+       In scene_cerg.xml obstacles are virtual: CERG constraints drawn as
+       overlays, which the arm can pass straight through.  Here the sphere
+       is a physical body, so the arm is stopped at its surface and a
+       contact force is generated.  Use it to study a soft constraint the
+       way it is meant to be used: wrapped around something solid.
+
+       The sphere is parked out of the way with a nominal size.  The caller
+       places and sizes it at run time (model.body_pos, model.geom_size,
+       geom_rbound, geom_aabb), so one file serves any obstacle position. -->
+
+  <include file="scene_cerg.xml"/>
+
+  <worldbody>
+    <body name="solid_obstacle" pos="0 0 -5">
+      <geom name="solid_obstacle" type="sphere" size="0.1"
+            contype="1" conaffinity="1" condim="3" friction="0.3 0.005 0.0001"
+            rgba="0.33 0.36 0.42 1"/>
+    </body>
+  </worldbody>
+</mujoco>

@@ -280,7 +280,7 @@ class TestCERGClosedLoop:
         sim.reset(q0=q0)
         cerg.reset(q0.copy())
 
-        with patch("cerg.core.cerg.auxiliary_reference.compute_dsm", return_value=1.0):
+        with patch("cerg.core.cerg.auxiliary_reference.compute_dsm", return_value=(1.0, {})):
             for _ in range(3000):
                 state = sim.get_state()
                 q_v = cerg.step(state.q, state.qd, q_r)

@@ -1,0 +1,53 @@
+<mujoco model="panda cerg scene">
+  <!-- Franka Panda arm (7 DOF, no gripper) in a lit scene tuned for
+       high-resolution rendering of CERG navigation-field visualisations.
+
+       panda_nohand.xml is vendored UNMODIFIED from mujoco_menagerie /
+       franka_emika_panda (Apache-2.0, see LICENSE in this directory).
+
+       Upstream ships position-servo actuators on every joint.  CERG applies
+       joint torques directly through data.qfrc_applied, so those servos
+       would fight it with data.ctrl stuck at zero, dragging the arm toward
+       q = 0 with a gain of 2000.  Disabling actuation here switches them
+       off while leaving their forcerange readable, which is where
+       cerg.robots.franka reads the official torque limits from.
+
+       Constraint obstacles are NOT geoms here: they are virtual CERG
+       constraints drawn as translucent overlay geoms at run time, so the
+       arm is governed by the navigation field rather than by contact. -->
+
+  <include file="panda_nohand.xml"/>
+
+  <option>
+    <flag actuation="disable"/>
+  </option>
+
+  <visual>
+    <headlight diffuse="0.45 0.45 0.45" ambient="0.35 0.35 0.35" specular="0.1 0.1 0.1"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="135" elevation="-22" offwidth="2560" offheight="1440"/>
+    <quality shadowsize="8192" offsamples="8" numslices="56" numstacks="28"/>
+    <map stiffness="100" fogstart="4" fogend="12" znear="0.02" shadowclip="2"/>
+    <scale forcewidth="0.04" contactwidth="0.08" contactheight="0.03"
+           connect="0.08" com="0.1" framelength="0.3" framewidth="0.02"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.26 0.34 0.44" rgb2="0.04 0.06 0.09"
+             width="800" height="4800"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge"
+             rgb1="0.21 0.25 0.30" rgb2="0.15 0.18 0.22" markrgb="0.55 0.58 0.62"
+             width="600" height="600"/>
+    <material name="groundplane" texture="groundplane" texuniform="true"
+              texrepeat="6 6" reflectance="0.12" specular="0.3" shininess="0.3"/>
+  </asset>
+
+  <worldbody>
+    <light pos="1.2 -0.8 2.4" dir="-0.4 0.3 -1" directional="true"
+           diffuse="0.5 0.5 0.5" specular="0.25 0.25 0.25" castshadow="true"/>
+    <light pos="-1.0 1.0 2.0" dir="0.35 -0.35 -1" directional="true"
+           diffuse="0.25 0.27 0.3" specular="0.05 0.05 0.05" castshadow="false"/>
+    <geom name="floor" pos="0 0 -0.001" size="0 0 0.05" type="plane"
+          material="groundplane" contype="0" conaffinity="0"/>
+  </worldbody>
+</mujoco>

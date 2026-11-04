@@ -1,0 +1,53 @@
+# CERG configuration for the Franka Emika Panda (7 DOF, no gripper),
+# tuned for the navigation-field visualisation demos.
+#
+# These gains are MINE, not ported from a working Panda controller: this is
+# a new robot in the repo with no prior config to preserve.  They are chosen
+# to be stiff enough to track the auxiliary reference against gravity and
+# soft enough that the DSM's Euler prediction stays well behaved at
+# prediction_dt.  Retune freely; nothing else in the repo depends on them.
+
+# ─── Controller gains ───
+# Used by BOTH the actual PD controller AND the CERG prediction loop.
+# Proximal joints carry the arm against gravity (torque limit 87 N·m);
+# the distal three are limited to 12 N·m, so they get lower gains.
+Kp: [100.0, 100.0, 100.0, 100.0, 40.0, 40.0, 20.0]
+Kd: [20.0, 20.0, 20.0, 20.0, 8.0, 8.0, 4.0]
+
+# ─── CERG prediction ───
+# 20 Euler steps per DSM evaluation.  Each step costs a mass matrix, a
+# Coriolis term, a gravity term and an 8-body FK pass, so the horizon is
+# kept short: this demo does not need to run in real time, but it should
+# stay interactive.
+prediction_dt: 0.01
+prediction_horizon: 0.2
+erg_dt: 0.01               # auxiliary reference ODE step (sim dt x decimation)
+
+# ─── Navigation field ───
+eta: 0.005                 # epsilon guarding the division by a vector norm
+zeta_q: 0.15               # joint-limit repulsion switches on this far out
+delta_q: 0.10              # ... and saturates this far from the limit
+delta_s: 0.10              # soft-constraint safety distance
+fd: 1.0                    # soft-field damping
+zeta_w: 0.15               # hard repulsion switches on 15 cm from the surface
+delta_w: 0.05              # ... and saturates 5 cm from it
+
+# ─── DSM robustness margins (subtracted from the raw distance) ───
+robust_delta_tau: 0.0
+robust_delta_q: 0.0
+robust_delta_dq: 0.0
+
+# ─── DSM scaling factors (kappa) ───
+kappa_tau: 1.0
+kappa_q: 1.0
+kappa_dq: 1.0
+kappa_soft: 1.0
+kappa_hard: 1.0
+kappa_energy: 1.0
+
+# ─── Energy constraint ───
+# Only binds the soft-constraint scenario.  With Kp ~ 100 a reference error
+# of a few tenths of a radian across seven joints is already tens of joules,
+# so this is set well above a normal reach and tightened on the command line
+# when demonstrating energy-limited soft contact.
+E_max: 20.0

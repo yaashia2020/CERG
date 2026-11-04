@@ -38,10 +38,14 @@ class ChainSubRobot(RobotModel):
         joints: list[JointInfo],
         name: str,
         body_names: list[str] | None = None,
+        link_segments: list[tuple[str, str]] | None = None,
     ) -> None:
         self._joints = list(joints)
         self._name = name
         self._body_names = list(body_names) if body_names is not None else []
+        self._link_segments = (
+            [tuple(s) for s in link_segments] if link_segments is not None else []
+        )
 
     @property
     def name(self) -> str:
@@ -62,6 +66,10 @@ class ChainSubRobot(RobotModel):
     @property
     def body_names(self) -> list[str]:
         return list(self._body_names)
+
+    @property
+    def link_segments(self) -> list[tuple[str, str]]:
+        return list(self._link_segments)
 
     def urdf_path(self):
         return None

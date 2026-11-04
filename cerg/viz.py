@@ -38,6 +38,8 @@ Produces four figures:
   2. Joint velocities — qd, velocity limits
   3. Joint torques    — tau, torque limits
   4. DSM & Energy     — DSM area chart; energy area chart with soft-contact markers
+plus an end-effector figure if ``ee_pos`` was recorded and a reference
+integrator figure if ``integrator`` was recorded.
 
 Works for any number of DOF (3, 7, 52, …).  Limits and joint names are all
 optional; omit any you don't have.
@@ -82,6 +84,7 @@ class _Step:
     energy: float | None
     soft_contact: bool
     ee_pos: dict | None  # {body_name: (3,) world position}
+    integ: dict | None   # ReferenceIntegrator snapshot, see record()
 
 
 class CERGHistory:
@@ -111,6 +114,7 @@ class CERGHistory:
         energy: float | None = None,
         soft_contact: bool = False,
         ee_pos: dict | None = None,
+        integrator=None,
     ) -> None:
         """Append one timestep of data.
 
@@ -130,6 +134,9 @@ class CERGHistory:
                         to place a vertical marker on the energy panel.
         ee_pos        : dict mapping end-effector body name → (3,) world position.
                         Pass robot.end_effectors positions to populate the EE plot.
+        integrator    : a ``ReferenceIntegrator`` after its step(); its goal,
+                        measured point, error, state, output, gate and clamps
+                        are copied to populate the integrator figure.
         """
         self._steps.append(_Step(
             t=float(t),
@@ -143,6 +150,12 @@ class CERGHistory:
             soft_contact=bool(soft_contact),
             ee_pos={k: np.asarray(v, dtype=float).copy() for k, v in ee_pos.items()}
                    if ee_pos is not None else None,
+            integ=None if integrator is None else {
+                "goal": integrator.goal, "meas": integrator.measured,
+                "e": integrator.error, "x": integrator.x, "u": integrator.u,
+                "g": float(integrator.gate), "lo": integrator.u_min,
+                "hi": integrator.u_max, "D": integrator.directions,
+            },
         ))
 
     def clear(self) -> None:
@@ -205,6 +218,22 @@ class CERGHistory:
         if not vals:
             return None
         return np.stack(vals, axis=1)  # (3, N)
+
+    def integrator_series(self) -> dict | None:
+        """Recorded integrator signals as arrays, or None if never recorded.
+
+        goal, meas, e, x, u: (m, N);  g: (N,);  lo, hi: (m,);  D: (m, 3);  t: (N,)
+        """
+        steps = [s for s in self._steps if s.integ is not None]
+        if not steps:
+            return None
+        out = {k: np.stack([s.integ[k] for s in steps], axis=1)
+               for k in ("goal", "meas", "e", "x", "u")}
+        out["g"] = np.array([s.integ["g"] for s in steps])
+        out["t"] = np.array([s.t for s in steps])
+        for k in ("lo", "hi", "D"):
+            out[k] = steps[-1].integ[k]
+        return out
 
     def ee_names(self) -> list[str]:
         """Sorted list of end-effector names that have recorded data."""
@@ -295,6 +324,10 @@ class CERGHistory:
                 t, ee_data, constraints or [],
                 _mk_title("End-Effector Positions"),
             ))
+
+        integ = self.integrator_series()
+        if integ is not None:
+            figs.append(_fig_reference_integrator(integ, _mk_title("Reference Integrator")))
 
         if show:
             plt.show()
@@ -637,6 +670,67 @@ def _fig_dsm_energy(t, dsm, energy, contact_times, E_max, suptitle):
         ax_e.tick_params(labelsize=8)
         ax_e.set_ylim(bottom=0)
         ax_e.legend(fontsize=8, loc="upper right", framealpha=0.75)
+
+    fig.tight_layout()
+    return fig
+
+
+def _fig_reference_integrator(integ, suptitle):
+    """Figure: ReferenceIntegrator signals, one column per direction.
+
+    Row 1: goal, measured point and shifted goal (goal + u) along d.
+    Row 2: state x and clamped output u = sat(x), with the clamps.
+    Row 3: error e = goal - measured.
+    Shaded spans mark where the gate was on.
+    """
+    import matplotlib.pyplot as plt
+
+    t, D, g = integ["t"], integ["D"], integ["g"]
+    m = D.shape[0]
+
+    # Gate-on spans [(t0, t1), ...]
+    on = np.r_[False, g > 0.0, False]
+    edges = np.flatnonzero(np.diff(on.astype(int)))
+    tt = np.r_[t, t[-1]]
+    spans = [(tt[a], tt[b]) for a, b in zip(edges[::2], edges[1::2])]
+
+    fig, axes = plt.subplots(3, m, figsize=(5.2 * m if m > 1 else 10, 8.4),
+                             squeeze=False, sharex=True)
+    fig.suptitle(suptitle, fontsize=11, fontweight="bold")
+
+    for j in range(m):
+        d = "[" + ", ".join(f"{v:.2g}" for v in D[j]) + "]"
+        ax_p, ax_x, ax_e = axes[0][j], axes[1][j], axes[2][j]
+
+        ax_p.plot(t, integ["goal"][j], color="#0b0b0b", lw=1.2, ls="--", label="goal")
+        ax_p.plot(t, integ["goal"][j] + integ["u"][j], color="#1976D2", lw=1.4,
+                  label="shifted goal (goal + u)")
+        ax_p.plot(t, integ["meas"][j], color="#F57C00", lw=1.6, label="measured")
+        ax_p.set_title(f"along d = {d}", fontsize=9)
+        ax_p.set_ylabel("position (m)", fontsize=9)
+
+        ax_x.plot(t, integ["x"][j], color="#9e9e9e", lw=1.2, label="x (state)")
+        ax_x.plot(t, integ["u"][j], color="#1976D2", lw=1.6, label="u = sat(x)")
+        for lim, name in ((integ["lo"][j], "u_min"), (integ["hi"][j], "u_max")):
+            if np.isfinite(lim):
+                ax_x.axhline(lim, color="#d32f2f", lw=1.0, ls="--", alpha=0.85,
+                             label=f"{name} = {lim:g}")
+        ax_x.set_ylabel("offset (m)", fontsize=9)
+        ax_x.set_title("integrator", fontsize=9)
+
+        ax_e.plot(t, integ["e"][j], color="#388E3C", lw=1.6, label="e = goal − measured")
+        ax_e.axhline(0, color="#52514e", lw=0.8, alpha=0.6)
+        ax_e.set_ylabel("error (m)", fontsize=9)
+        ax_e.set_xlabel("t (s)", fontsize=8)
+        ax_e.set_title("error", fontsize=9)
+
+        for ax in (ax_p, ax_x, ax_e):
+            for i, (a, b) in enumerate(spans):
+                ax.axvspan(a, b, color="#F57C00", alpha=0.10, lw=0,
+                           label="gate on" if i == 0 else None)
+            ax.grid(True, alpha=0.22, linestyle=":")
+            ax.tick_params(labelsize=8)
+            ax.legend(fontsize=7, loc="best", framealpha=0.75)
 
     fig.tight_layout()
     return fig

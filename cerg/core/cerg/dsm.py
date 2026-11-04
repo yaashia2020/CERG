@@ -220,18 +220,29 @@ def _dsm_constraint_distance(
     pred: PredictionResult,
     constraints: list[Constraint],
     kappa: float,
+    segments: list[tuple[int, int]] | tuple = (),
 ) -> tuple[float, dict]:
     """Min signed distance across predicted body positions and constraints.
 
-    Returns (value, info) — info: {"step", "body_idx", "constraint_idx"}
-    pointing to the worst case.  If `constraints` is empty, value is +inf
-    and info indices are -1.
+    `segments` lists (idx_a, idx_b) pairs into the body axis of
+    pred.body_pos (see RobotModel.link_segment_indices).  For each, the
+    interior closest point on the segment is also checked, so curved
+    obstacles can catch a link mid-span.  Endpoints are covered by the
+    body loop, and half-spaces never produce an interior point.
+
+    Returns (value, info) — info: {"step", "body_idx", "constraint_idx",
+    "segment_idx", "lam"} pointing to the worst case.  For a body hit,
+    segment_idx is -1 and lam is 0.  For a segment hit, body_idx is the
+    segment's first endpoint and lam locates the point along it.  If
+    `constraints` is empty, value is +inf and info indices are -1.
     """
+    empty = {"step": -1, "body_idx": -1, "constraint_idx": -1,
+             "segment_idx": -1, "lam": 0.0}
     if not constraints:
-        return float("inf"), {"step": -1, "body_idx": -1, "constraint_idx": -1}
+        return float("inf"), empty
 
     dsm = float("inf")
-    arg_step, arg_body, arg_c = -1, -1, -1
+    arg_step, arg_body, arg_c, arg_seg, arg_lam = -1, -1, -1, -1, 0.0
     num_bodies = pred.body_pos.shape[0]
     num_steps = pred.body_pos.shape[2]
 
@@ -242,9 +253,23 @@ def _dsm_constraint_distance(
                 dist = constraint.signed_distance(body_pos)
                 if dist < dsm:
                     dsm, arg_step, arg_body, arg_c = dist, k, b, ci
+                    arg_seg, arg_lam = -1, 0.0
+
+        for si, (ia, ib) in enumerate(segments):
+            p_a = pred.body_pos[ia, :, k]
+            p_b = pred.body_pos[ib, :, k]
+            for ci, constraint in enumerate(constraints):
+                pt, lam = constraint.segment_closest_point(p_a, p_b)
+                if not (0.0 < lam < 1.0):
+                    continue
+                dist = constraint.signed_distance(pt)
+                if dist < dsm:
+                    dsm, arg_step, arg_body, arg_c = dist, k, ia, ci
+                    arg_seg, arg_lam = si, lam
 
     return kappa * dsm, {
         "step": arg_step, "body_idx": arg_body, "constraint_idx": arg_c,
+        "segment_idx": arg_seg, "lam": arg_lam,
     }
 
 
@@ -252,26 +277,28 @@ def dsm_soft(
     pred: PredictionResult,
     constraints: list[Constraint],
     kappa: float,
+    segments: list[tuple[int, int]] | tuple = (),
 ) -> tuple[float, dict]:
     """DSM for soft constraints (coupled with energy).
 
     Returns (value, info) — see _dsm_constraint_distance.
     """
     soft = [c for c in constraints if c.kind == "soft"]
-    return _dsm_constraint_distance(pred, soft, kappa)
+    return _dsm_constraint_distance(pred, soft, kappa, segments)
 
 
 def dsm_hard(
     pred: PredictionResult,
     constraints: list[Constraint],
     kappa: float,
+    segments: list[tuple[int, int]] | tuple = (),
 ) -> tuple[float, dict]:
     """DSM for hard constraints (standalone, NOT coupled with energy).
 
     Returns (value, info) — see _dsm_constraint_distance.
     """
     hard = [c for c in constraints if c.kind == "hard"]
-    return _dsm_constraint_distance(pred, hard, kappa)
+    return _dsm_constraint_distance(pred, hard, kappa, segments)
 
 
 def dsm_energy(
@@ -322,6 +349,7 @@ def compute_dsm(
     robot: RobotModel,
     constraints: list[Constraint],
     config: CERGConfig,
+    E_max_override: float | None = None,
 ) -> tuple[float, dict]:
     """Compute the Dynamic Safety Margin and a per-component breakdown.
 
@@ -333,6 +361,11 @@ def compute_dsm(
 
     dsm_energy is coupled with dsm_soft only.
     dsm_hard is standalone.
+
+    E_max_override, when given, replaces config.E_max in the energy margin.
+    The ERG uses it during an E_max-tighten transition: the DSM keeps
+    enforcing the pre-drop E_max (so q_v stays mobile and the retraction
+    law can shed energy) until E is within the new limit.
 
     Returns
     -------
@@ -357,9 +390,11 @@ def compute_dsm(
     d_tau,    i_tau    = dsm_torque(pred, robot.tau_max, nv, config.robust_delta_tau, config.kappa_tau)
     d_q,      i_q      = dsm_position(pred, robot.q_lower, robot.q_upper, nv, config.robust_delta_q, config.kappa_q)
     d_dq,     i_dq     = dsm_velocity(pred, qd_limits, nv, config.robust_delta_dq, config.kappa_dq)
-    d_soft,   i_soft   = dsm_soft(pred, constraints, config.kappa_soft)
-    d_hard,   i_hard   = dsm_hard(pred, constraints, config.kappa_hard)
-    d_energy, i_energy = dsm_energy(pred.energy, config.E_max, d_soft,
+    segments = robot.link_segment_indices
+    d_soft,   i_soft   = dsm_soft(pred, constraints, config.kappa_soft, segments)
+    d_hard,   i_hard   = dsm_hard(pred, constraints, config.kappa_hard, segments)
+    E_max = config.E_max if E_max_override is None else E_max_override
+    d_energy, i_energy = dsm_energy(pred.energy, E_max, d_soft,
                                     kappa_s=1.0, kappa_energy=config.kappa_energy)
 
     breakdown = {
@@ -373,5 +408,5 @@ def compute_dsm(
 
     # Final DSM: min across all, lower bounded by 0
     dsm = min(d_tau, d_q, d_dq, d_energy, d_hard)
-    return max(10 * dsm, 0.0), breakdown
+    return max(0.5* dsm, 0.0), breakdown
 

@@ -80,6 +80,35 @@ class RobotModel(ABC):
         """
         return []
 
+    @property
+    def link_segments(self) -> list[tuple[str, str]]:
+        """Pairs of body names whose connecting straight segment approximates a link.
+
+        The DSM and navigation field always check the bodies in body_names
+        as points.  Segments listed here additionally let curved obstacles
+        (spheres, cylinders) catch a link between two tracked bodies, via
+        Constraint.segment_closest_point.  Half-space constraints are
+        unaffected: their closest point is always an endpoint.
+
+        Both names in each pair must appear in body_names.  Defaults to
+        empty (point checks only).
+        """
+        return []
+
+    @property
+    def link_segment_indices(self) -> list[tuple[int, int]]:
+        """link_segments resolved to index pairs into body_names."""
+        names = self.body_names
+        out: list[tuple[int, int]] = []
+        for a, b in self.link_segments:
+            if a not in names or b not in names:
+                raise ValueError(
+                    f"link_segments entry ({a!r}, {b!r}) must reference names "
+                    f"in body_names={names}"
+                )
+            out.append((names.index(a), names.index(b)))
+        return out
+
     @abstractmethod
     def urdf_path(self) -> Path | None:
         """Path to URDF file, or None if not available."""
