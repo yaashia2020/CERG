@@ -31,7 +31,7 @@ class CERGConfig:
         "eta", "zeta_q", "delta_q", "delta_s", "fd", "zeta_w", "delta_w",
         "robust_delta_tau", "robust_delta_q", "robust_delta_dq",
         "kappa_tau", "kappa_q", "kappa_dq", "kappa_soft", "kappa_hard", "kappa_energy",
-        "kappa_delta_s", "delta_i",
+        "kappa_delta_s", "delta_i", "kappa_ref", "dsm_scale",
         "E_max", "E_min",
     }
     _REQUIRED = {"Kp", "Kd"}
@@ -56,6 +56,8 @@ class CERGConfig:
             "kappa_tau": 1.0, "kappa_q": 1.0, "kappa_dq": 1.0,
             "kappa_soft": 1.0, "kappa_hard": 1.0, "kappa_energy": 1.0,
             "kappa_delta_s": 1.0, "delta_i": 0.01,
+            "kappa_ref": 1.0,     # multiplier on the reference update dsm * rho (speed of q_v); 1 = original
+            "dsm_scale": 0.45,    # scale on the aggregate DSM (was hard-coded 0.45 in auxiliary_reference.step)
             "E_max": 0.5, "E_min": 0.0,
         }
         for key in self._FLOAT_FIELDS:

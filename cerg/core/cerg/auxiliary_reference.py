@@ -214,10 +214,10 @@ class CERG:
             config=cfg,
         )
         # 0.45 scale preserved from the pre-report compute_dsm (debug state)
-        dsm = 0.45 * report.value
+        dsm = cfg.dsm_scale * report.value      # default 0.45 (the original hard-coded scale)
         self._last_dsm = dsm
         self._last_dsm_report = report
         # 3. ODE Euler step: dq_v/dt = DSM * rho
-        self._q_v = self._q_v + dsm * rho * cfg.erg_dt
+        self._q_v = self._q_v + cfg.kappa_ref * dsm * rho * cfg.erg_dt   # kappa_ref: reference speed gain
 
         return self._q_v.copy()
